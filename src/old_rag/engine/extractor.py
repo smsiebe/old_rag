@@ -155,3 +155,4 @@ class DocumentExtractor(ExtractorProtocol):
             attachments=extracted_attachments,
             extracted_at_utc=datetime.now(timezone.utc),
         )
+

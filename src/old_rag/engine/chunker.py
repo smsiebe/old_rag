@@ -111,3 +111,4 @@ class ParentAwareChunker(ChunkerProtocol):
             idx += step
 
         return chunks
+

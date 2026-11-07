@@ -218,3 +218,4 @@ class DirectoryWatcher:
         self.handler.stop()
         self.observer.stop()
         self.observer.join(timeout=2.0)
+

@@ -72,3 +72,4 @@ def test_coordinator_end_to_end_ingest_and_reindex(cas_engine, catalog_repo, tem
     # 3. Test offline re-indexing (reads from CAS Tier 1 without Outlook)
     reindexed_count = coord.reindex_all()
     assert reindexed_count >= 1
+

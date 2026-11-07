@@ -168,3 +168,4 @@ class HybridSearchEngine(SearchEngineProtocol):
 
         scored_results.sort(key=_sort_key)
         return scored_results[: query.top_k]
+

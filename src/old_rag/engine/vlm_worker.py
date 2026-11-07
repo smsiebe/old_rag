@@ -113,3 +113,4 @@ def run_vlm_worker_stdio_loop() -> None:
 
         sys.stdout.write(json.dumps(res) + "\n")
         sys.stdout.flush()
+

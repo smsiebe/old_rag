@@ -46,3 +46,4 @@ def test_eml_file_parsing(temp_app_dir):
     assert payload.subject == "Test Incident Report SN-4471-AB"
     assert payload.internet_message_id == "<inc-4471@example.com>"
     assert "status code 500" in payload.body_text
+

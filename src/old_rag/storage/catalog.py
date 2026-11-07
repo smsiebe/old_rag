@@ -233,3 +233,4 @@ class CatalogRepository(CatalogProtocol):
                 conn.execute(f"DELETE FROM blobs WHERE blob_hash IN ({placeholders})", orphans)
                 conn.commit()
             return orphans
+

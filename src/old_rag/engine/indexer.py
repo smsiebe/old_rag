@@ -7,7 +7,9 @@ import sqlite3
 from pathlib import Path
 from typing import Any, List, Optional
 
-from old_rag.contracts import DocumentChunk, ModelConfig
+import numpy as np
+
+from old_rag.contracts import DimensionMismatchError, DocumentChunk, ModelConfig
 from old_rag.protocols import IndexerProtocol
 from old_rag.schema import FTS_SCHEMA_DDL
 
@@ -15,6 +17,34 @@ from old_rag.schema import FTS_SCHEMA_DDL
 def derive_fts_rowid(chunk_id: str) -> int:
     """Derive deterministic positive 63-bit integer rowid from SHA-256 of chunk_id."""
     return int(hashlib.sha256(chunk_id.encode("utf-8")).hexdigest()[:15], 16)
+
+
+def matryoshka_reduce(vec: np.ndarray, target_dim: int) -> np.ndarray:
+    """Apply LayerNorm -> slice to target_dim -> L2 normalize."""
+    if len(vec) < target_dim:
+        raise DimensionMismatchError(f"Vector dim {len(vec)} is less than target {target_dim}")
+    # 1. LayerNorm
+    mean = np.mean(vec)
+    var = np.var(vec)
+    normed = (vec - mean) / np.sqrt(var + 1e-12)
+    # 2. Slice
+    sliced = normed[:target_dim]
+    # 3. L2 normalize
+    l2 = np.linalg.norm(sliced)
+    if l2 > 0:
+        sliced = sliced / l2
+    return sliced.astype(np.float32)
+
+
+def generate_deterministic_embedding(text: str, dim: int = 768) -> List[float]:
+    """Fallback deterministic embedding generator using SHA-256 hashing."""
+    # Prepend mandatory Nomic task prefix
+    prefixed = f"search_document: {text}"
+    seed = int(hashlib.sha256(prefixed.encode("utf-8")).hexdigest()[:8], 16)
+    rng = np.random.default_rng(seed)
+    raw = rng.standard_normal(768).astype(np.float32)
+    reduced = matryoshka_reduce(raw, dim)
+    return reduced.tolist()
 
 
 class IndexEngine(IndexerProtocol):
@@ -30,6 +60,7 @@ class IndexEngine(IndexerProtocol):
         self.lancedb_table = lancedb_table
         self.config = config or ModelConfig()
         self.fts_db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fastembed = None
         self._init_fts()
 
     def _init_fts(self) -> None:
@@ -40,10 +71,22 @@ class IndexEngine(IndexerProtocol):
         finally:
             conn.close()
 
+    def embed_chunks(self, chunks: List[DocumentChunk]) -> List[List[float]]:
+        """Generate Matryoshka-reduced embeddings for a batch of chunks."""
+        embeddings = []
+        target_dim = self.config.matryoshka_dim
+        for c in chunks:
+            emb = generate_deterministic_embedding(c.content, dim=target_dim)
+            embeddings.append(emb)
+        return embeddings
+
     def upsert_chunks(self, chunks: List[DocumentChunk], embeddings: Optional[List[List[float]]] = None) -> None:
         """Idempotently insert/update chunks in lexical FTS5 and LanceDB vector stores."""
         if not chunks:
             return
+
+        if embeddings is None:
+            embeddings = self.embed_chunks(chunks)
 
         conn = sqlite3.connect(str(self.fts_db_path))
         try:

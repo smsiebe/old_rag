@@ -75,3 +75,4 @@ class ModelResolver(ModelResolverProtocol):
         embedder_dir.mkdir(parents=True, exist_ok=True)
         tokenizer_path = embedder_dir / "tokenizer.json"
         return str(embedder_dir), str(tokenizer_path)
+

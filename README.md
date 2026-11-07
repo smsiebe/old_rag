@@ -15,3 +15,4 @@ Zero-admin sovereign local Outlook and filesystem hybrid RAG engine.
    - Text JSON tier stores canonical extraction output for offline re-indexing without touching Outlook or VLM.
 4. **Centralized Schemas**:
    - Explicit Phase 0 DDL in `old_rag.schema` for `catalog.db` and SQLite FTS5 indexers.
+

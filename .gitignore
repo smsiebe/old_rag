@@ -54,3 +54,4 @@ cover/
 *.db-wal
 *.db-shm
 *.lancedb
+

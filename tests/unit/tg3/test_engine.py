@@ -95,3 +95,4 @@ def test_exact_identifier_pinning_rank1(temp_app_dir):
     # Verify Rule 18 precision
     assert isinstance(results[0].rrf_score, float)
     assert results[0].rrf_score > 0.0
+

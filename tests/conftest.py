@@ -35,3 +35,4 @@ def cas_engine(storage_config):
 @pytest.fixture
 def catalog_repo(temp_app_dir):
     return CatalogRepository(temp_app_dir / "catalog.db")
+

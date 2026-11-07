@@ -19,7 +19,11 @@ from old_rag.engine.search import HybridSearchEngine
 from old_rag.ingest.outlook import ClassicMAPIConnector, is_new_outlook_active
 from old_rag.ingest.watcher import DirectoryWatcher
 from old_rag.pipeline.coordinator import PipelineCoordinator
-from old_rag.pipeline.lifecycle import SingleInstanceMutex, get_scoped_pipe_name
+from old_rag.pipeline.lifecycle import (
+    NamedPipeServer,
+    SingleInstanceMutex,
+    get_scoped_pipe_name,
+)
 from old_rag.storage.cas import CASEngine, get_default_app_data_dir
 from old_rag.storage.catalog import CatalogRepository
 
@@ -51,9 +55,11 @@ class DaemonProcess:
             config=self.model_cfg,
         )
 
+        self.pipe_server = NamedPipeServer(get_scoped_pipe_name(), self.handle_client_request)
         self.vlm_process: Optional[subprocess.Popen] = None
         self._running = False
         self.watcher: Optional[DirectoryWatcher] = None
+        self._mapi_connector = ClassicMAPIConnector(allow_background_launch=False)
 
     def start_vlm_subprocess(self) -> None:
         """Spawn isolated Process 2 at BELOW_NORMAL_PRIORITY_CLASS."""
@@ -103,6 +109,11 @@ class DaemonProcess:
             elif action == "reindex":
                 count = self.coordinator.reindex_all()
                 return json.dumps({"success": True, "count": count})
+            elif action == "purge":
+                orphans = self.catalog.prune_orphans(purge_source_deleted=True)
+                for h in orphans:
+                    self.cas.delete_blob(h)
+                return json.dumps({"success": True, "pruned_count": len(orphans)})
             elif action == "search":
                 from old_rag.contracts import SearchQuery
                 q = SearchQuery.model_validate(req.get("query", {}))
@@ -135,6 +146,8 @@ class DaemonProcess:
         # 3. Start VLM subprocess
         self.start_vlm_subprocess()
 
+        # 4. Start Named Pipe IPC Server
+        self.pipe_server.start()
         print(f"OldRAG Daemon running. IPC Pipe: {get_scoped_pipe_name()}")
 
         try:
@@ -145,6 +158,7 @@ class DaemonProcess:
 
     def stop(self) -> None:
         self._running = False
+        self.pipe_server.stop()
         if self.vlm_process and self.vlm_process.poll() is None:
             self.vlm_process.terminate()
         self.cas.sweep_tmp()

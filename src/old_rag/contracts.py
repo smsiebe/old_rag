@@ -227,3 +227,4 @@ class OutboxRecord(BaseModel):
     status: OutboxStatus
     created_at_utc: datetime
     error_message: Optional[str] = None
+

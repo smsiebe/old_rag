@@ -138,7 +138,10 @@ class CASEngine(ContentStoreProtocol):
             return None
         nonce = data[:12]
         ciphertext = data[12:]
-        return self._aesgcm.decrypt(nonce, ciphertext, aad)
+        try:
+            return self._aesgcm.decrypt(nonce, ciphertext, aad)
+        except Exception:
+            return None
 
     # --- Tier 1: Canonical Extracted Text JSON ---
 
@@ -240,3 +243,4 @@ class CASEngine(ContentStoreProtocol):
                     except Exception:
                         pass
         return count
+

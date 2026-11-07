@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 
 def get_sid_and_session_id() -> Tuple[str, str]:
@@ -29,7 +32,6 @@ def get_sid_and_session_id() -> Tuple[str, str]:
 def get_scoped_pipe_name() -> str:
     """Return \\\\.\\pipe\\OldRAG_<SID>_<SessionID>."""
     sid, session_id = get_sid_and_session_id()
-    # Normalize characters for pipe name
     clean_sid = sid.replace("\\", "_").replace(":", "_")
     return f"\\\\.\\pipe\\OldRAG_{clean_sid}_{session_id}"
 
@@ -52,6 +54,7 @@ class SingleInstanceMutex:
         if sys.platform != "win32":
             return True
         try:
+            import win32api
             import win32event
             import winerror
             self._handle = win32event.CreateMutex(None, False, self.mutex_name)
@@ -69,6 +72,105 @@ class SingleInstanceMutex:
             except Exception:
                 pass
             self._handle = None
+
+
+class NamedPipeServer:
+    """Win32 Named Pipe Server secured to current user SID."""
+
+    # Registry memory for test/in-process fallbacks
+    _in_memory_handlers: dict[str, Callable[[str], str]] = {}
+
+    def __init__(self, pipe_name: str, handler: Callable[[str], str]):
+        self.pipe_name = pipe_name
+        self.handler = handler
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        self._running = True
+        NamedPipeServer._in_memory_handlers[self.pipe_name] = self.handler
+        if sys.platform == "win32":
+            self._thread = threading.Thread(target=self._win32_pipe_loop, daemon=True)
+            self._thread.start()
+
+    def _win32_pipe_loop(self) -> None:
+        import win32file
+        import win32pipe
+
+        PIPE_ACCESS_DUPLEX = 0x00000003
+        PIPE_TYPE_MESSAGE = 0x00000004
+        PIPE_READMODE_MESSAGE = 0x00000002
+        PIPE_WAIT = 0x00000000
+        FILE_FLAG_FIRST_PIPE_INSTANCE = 0x00080000
+
+        while self._running:
+            try:
+                open_mode = PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE
+                pipe_mode = PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT
+                h_pipe = win32pipe.CreateNamedPipe(
+                    self.pipe_name,
+                    open_mode,
+                    pipe_mode,
+                    1,      # max instances
+                    65536,  # out buffer
+                    65536,  # in buffer
+                    1000,   # default timeout ms
+                    None,   # default DACL for owner token
+                )
+
+                # Connect client
+                win32pipe.ConnectNamedPipe(h_pipe, None)
+
+                # Read message
+                hr, req_data = win32file.ReadFile(h_pipe, 65536)
+                req_str = req_data.decode("utf-8").strip()
+
+                # Dispatch
+                resp_str = self.handler(req_str)
+                resp_data = resp_str.encode("utf-8")
+
+                # Write response
+                win32file.WriteFile(h_pipe, resp_data)
+                win32file.FlushFileBuffers(h_pipe)
+                win32pipe.DisconnectNamedPipe(h_pipe)
+                win32file.CloseHandle(h_pipe)
+            except Exception:
+                time.sleep(0.1)
+
+    def stop(self) -> None:
+        self._running = False
+        NamedPipeServer._in_memory_handlers.pop(self.pipe_name, None)
+
+
+class NamedPipeClient:
+    """Client for OldRAG Daemon Named Pipe with in-process fallback."""
+
+    def __init__(self, pipe_name: Optional[str] = None):
+        self.pipe_name = pipe_name or get_scoped_pipe_name()
+
+    def call(self, request_payload: dict, timeout_ms: int = 5000) -> dict:
+        req_str = json.dumps(request_payload)
+
+        # 1. In-memory dispatch if available
+        if self.pipe_name in NamedPipeServer._in_memory_handlers:
+            resp_str = NamedPipeServer._in_memory_handlers[self.pipe_name](req_str)
+            return json.loads(resp_str)
+
+        # 2. Win32 CallNamedPipe
+        if sys.platform == "win32":
+            try:
+                import win32pipe
+                resp_data = win32pipe.CallNamedPipe(
+                    self.pipe_name,
+                    req_str.encode("utf-8"),
+                    65536,
+                    timeout_ms,
+                )
+                return json.loads(resp_data.decode("utf-8"))
+            except Exception as e:
+                return {"error": f"Named Pipe IPC failed: {str(e)}"}
+
+        return {"error": "Named Pipe server not reachable"}
 
 
 def set_user_autostart(enable: bool, executable_path: Optional[str] = None) -> bool:

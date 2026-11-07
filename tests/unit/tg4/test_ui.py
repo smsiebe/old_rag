@@ -38,3 +38,4 @@ def test_bridge_schema_matches_contracts():
     dumped = sr.model_dump()
     for req_field in schema["definitions"]["SearchResultItem"]["required"]:
         assert req_field in dumped
+

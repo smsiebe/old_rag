@@ -207,3 +207,4 @@ class CoordinatorProtocol(Protocol):
     def reindex_all(self) -> int:
         """Perform 100% offline rebuild reading from CAS Tier 1 without Outlook or VLM."""
         ...
+

@@ -122,3 +122,4 @@ class PipelineCoordinator(CoordinatorProtocol):
                 self.indexer.upsert_chunks(chunks)
                 count += 1
         return count
+

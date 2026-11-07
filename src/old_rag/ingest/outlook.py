@@ -224,3 +224,4 @@ class ClassicMAPIConnector:
                         pythoncom.PumpWaitingMessages()
         finally:
             pythoncom.CoUninitialize()
+

@@ -131,3 +131,4 @@ def get_lancedb_pyarrow_schema(dim: int = 768):
         pa.field("source_type", pa.string(), nullable=False),
         pa.field("content", pa.string(), nullable=False),
     ])
+

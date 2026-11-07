@@ -10,7 +10,7 @@ from old_rag.contracts import StorageConfig
 from old_rag.engine.vlm_worker import run_vlm_worker_stdio_loop
 from old_rag.ingest.outlook import is_new_outlook_active, probe_object_model_guard
 from old_rag.pipeline.daemon import DaemonProcess
-from old_rag.pipeline.lifecycle import get_scoped_pipe_name
+from old_rag.pipeline.lifecycle import NamedPipeClient, get_scoped_pipe_name
 from old_rag.storage.cas import CASEngine, KeyManager, get_default_app_data_dir
 
 
@@ -71,18 +71,23 @@ def cmd_ui(args: argparse.Namespace) -> None:
 
 
 def cmd_status(args: argparse.Namespace) -> None:
-    """Check running daemon status over named pipe."""
-    from old_rag.ui.app import BridgeAPI
-    api = BridgeAPI()
-    res = api.get_status()
+    """Query running daemon status over named pipe."""
+    client = NamedPipeClient()
+    res = client.call({"action": "status"})
     print(res)
 
 
 def cmd_reindex(args: argparse.Namespace) -> None:
     """Trigger offline re-index from CAS Tier 1."""
-    from old_rag.ui.app import BridgeAPI
-    api = BridgeAPI()
-    res = api.reindex()
+    client = NamedPipeClient()
+    res = client.call({"action": "reindex"})
+    print(res)
+
+
+def cmd_purge(args: argparse.Namespace) -> None:
+    """Purge zero-ref blobs and dead-letter records."""
+    client = NamedPipeClient()
+    res = client.call({"action": "purge"})
     print(res)
 
 
@@ -96,6 +101,7 @@ def main() -> None:
     subparsers.add_parser("ui", help="Launch native UI overlay")
     subparsers.add_parser("status", help="Query daemon status")
     subparsers.add_parser("reindex", help="Trigger offline re-indexing from text CAS")
+    subparsers.add_parser("purge", help="Purge orphaned blobs from storage")
 
     exp_parser = subparsers.add_parser("export-key", help="Export encrypted DEK backup")
     exp_parser.add_argument("--output", "-o", help="Target output file path")
@@ -113,6 +119,8 @@ def main() -> None:
         cmd_status(args)
     elif args.command == "reindex":
         cmd_reindex(args)
+    elif args.command == "purge":
+        cmd_purge(args)
     elif args.command == "export-key":
         cmd_export_key(args)
     else:
