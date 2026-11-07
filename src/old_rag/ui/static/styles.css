@@ -1,0 +1,122 @@
+:root {
+    --bg-color: #1a1b1e;
+    --card-bg: #25262b;
+    --text-primary: #e4e5e7;
+    --text-secondary: #909296;
+    --accent: #339af0;
+    --accent-hover: #228be6;
+    --border: #373a40;
+    --badge-high: #2b8a3e;
+    --badge-med: #e67700;
+    --badge-low: #c92a2a;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    padding: 16px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.search-container {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+input[type="text"] {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text-primary);
+    font-size: 15px;
+    outline: none;
+}
+
+input[type="text"]:focus {
+    border-color: var(--accent);
+}
+
+button {
+    padding: 10px 16px;
+    border-radius: 6px;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+button:hover {
+    background: var(--accent-hover);
+}
+
+.results-list {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.result-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.tier-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.tier-high { background: var(--badge-high); color: #fff; }
+.tier-med { background: var(--badge-med); color: #fff; }
+.tier-low { background: var(--badge-low); color: #fff; }
+
+.card-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.card-content {
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.action-link {
+    display: inline-block;
+    margin-top: 8px;
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.action-link:hover {
+    text-decoration: underline;
+}

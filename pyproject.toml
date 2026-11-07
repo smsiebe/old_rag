@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.20.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "old-rag"
+version = "0.1.0"
+description = "Zero-admin sovereign local Outlook and filesystem hybrid RAG engine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [
+    { name = "OldRAG Team" }
+]
+dependencies = [
+    "pydantic>=2.9.0,<3.0.0",
+    "numpy>=1.26.0",
+    "Pillow>=10.0.0",
+    "cryptography>=42.0.0",
+    "watchdog>=4.0.0",
+    "pywin32>=306; sys_platform == 'win32'",
+    "psutil>=5.9.0",
+    "python-docx>=1.1.0",
+    "openpyxl>=3.1.0",
+]
+
+[project.optional-dependencies]
+ai = [
+    "fastembed>=0.3.6",
+    "lancedb>=0.13.0",
+    "huggingface-hub>=0.25.0",
+    "pypdfium2>=4.30.0",
+    "python-pptx>=1.0.0",
+]
+ui = [
+    "pywebview>=5.2",
+    "pystray>=0.19.5",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+dev = [
+    "build>=1.2.0",
+]
+
+[project.scripts]
+old-rag = "old_rag.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/old_rag"]
+include = [
+    "src/old_rag/ui/static/**",
+    "src/old_rag/bridge_schema.json",
+]
+exclude = [
+    "**/*.gguf",
+    "**/*.onnx",
+    "**/*.dpapi",
+    "**/*.enc",
+]
+
+[tool.pytest.ini_options]
+strict_markers = true
+testpaths = ["tests"]
+markers = [
+    "live_outlook: requires an active Classic Outlook MAPI profile on Windows",
+]

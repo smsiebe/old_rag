@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OldRAG Search</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Load classic IIFE bridge script strictly before app logic -->
+    <script src="bridge.js"></script>
+    <script src="app.js"></script>
+</head>
+<body>
+    <div class="search-container">
+        <input type="text" id="search-input" placeholder="Search Outlook emails and local files (e.g. SN-4471-AB)..." autofocus>
+        <button id="search-btn">Search</button>
+    </div>
+    <div id="results-list" class="results-list">
+        <div style="color: #909296; padding: 12px; text-align: center;">
+            Type a query or identifier above to search across local Outlook and indexed documents.
+        </div>
+    </div>
+</body>
+</html>
