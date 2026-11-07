@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from old_rag.contracts import ModelConfig, StorageConfig
+from old_rag.contracts import ModelConfig, StorageConfig, safe_json_dumps, safe_json_loads
 from old_rag.engine.chunker import ParentAwareChunker
 from old_rag.engine.extractor import DocumentExtractor
 from old_rag.engine.indexer import IndexEngine
@@ -94,7 +94,7 @@ class DaemonProcess:
     def handle_client_request(self, raw_req: str) -> str:
         """Handle JSON IPC request from UI or CLI."""
         try:
-            req = json.loads(raw_req)
+            req = safe_json_loads(raw_req)
             action = req.get("action")
             if action == "status":
                 res = {
@@ -105,29 +105,29 @@ class DaemonProcess:
                     "classic_outlook_active": not is_new_outlook_active(),
                     "on_battery": self.is_on_battery(),
                 }
-                return json.dumps(res)
+                return safe_json_dumps(res)
             elif action == "reindex":
                 count = self.coordinator.reindex_all()
-                return json.dumps({"success": True, "count": count})
+                return safe_json_dumps({"success": True, "count": count})
             elif action == "purge":
                 orphans = self.catalog.prune_orphans(purge_source_deleted=True)
                 for h in orphans:
                     self.cas.delete_blob(h)
-                return json.dumps({"success": True, "pruned_count": len(orphans)})
+                return safe_json_dumps({"success": True, "pruned_count": len(orphans)})
             elif action == "search":
                 from old_rag.contracts import SearchQuery
                 q = SearchQuery.model_validate(req.get("query", {}))
                 results = self.search_engine.search(q)
-                return json.dumps({"results": [r.model_dump() for r in results]})
+                return safe_json_dumps({"results": [r.model_dump() for r in results]})
             elif action == "open_cached_msg":
                 doc_id = req.get("doc_id")
                 temp_path = self.cas.create_temp_view_file(doc_id)
                 if temp_path:
-                    return json.dumps({"success": True, "temp_view_path": str(temp_path)})
-                return json.dumps({"success": False, "error": "Not found in CAS"})
-            return json.dumps({"error": f"Unknown action {action}"})
+                    return safe_json_dumps({"success": True, "temp_view_path": str(temp_path)})
+                return safe_json_dumps({"success": False, "error": "Not found in CAS"})
+            return safe_json_dumps({"error": f"Unknown action {action}"})
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            return safe_json_dumps({"error": str(e)})
 
     def run(self) -> None:
         if not self.mutex.acquire():

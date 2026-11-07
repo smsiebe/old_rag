@@ -47,6 +47,10 @@ document.addEventListener("DOMContentLoaded", function () {
             html += "<div class='card-meta'>";
             if (item.sender) html += "<span>From: " + escapeHtml(item.sender) + "</span> | ";
             if (item.folder) html += "<span>Folder: " + escapeHtml(item.folder) + "</span>";
+            if (item.received_ts_utc) {
+                var dateStr = item.received_ts_utc.substring(0, 10);
+                html += " | <span>Date: " + escapeHtml(dateStr) + "</span>";
+            }
             html += "</div>";
 
             html += "<div class='card-content'>" + formatSnippet(item.content) + "</div>";

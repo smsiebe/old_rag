@@ -2,10 +2,50 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
+
+
+# --- Custom JSON Serialization Infrastructure ---
+
+def json_default_serializer(obj: Any) -> Any:
+    """Fallback serializer ensuring datetimes, paths, enums, and models serialize cleanly to JSON."""
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, Path):
+        return str(obj)
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
+
+
+def safe_json_dumps(obj: Any, **kwargs) -> str:
+    """Robust JSON serializer that guarantees standard Python JSON serialization without TypeError."""
+    if "default" not in kwargs:
+        kwargs["default"] = json_default_serializer
+    return json.dumps(obj, **kwargs)
+
+
+def safe_json_loads(s: Union[str, bytes], **kwargs) -> Any:
+    """Parse JSON strings or bytes."""
+    return json.loads(s, **kwargs)
+
+
+class SovereignBaseModel(BaseModel):
+    """Base model enforcing JSON-safe serialization standards across all DTOs."""
+
+    def model_dump(self, *args, **kwargs) -> Dict[str, Any]:
+        if "mode" not in kwargs:
+            kwargs["mode"] = "json"
+        return super().model_dump(*args, **kwargs)
 
 
 # --- Custom Exception Contracts ---
@@ -58,7 +98,7 @@ class OutboxStatus(str, Enum):
 
 # --- Configuration DTOs ---
 
-class StorageConfig(BaseModel):
+class StorageConfig(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     app_data_dir: str = Field(
@@ -79,7 +119,7 @@ class StorageConfig(BaseModel):
     )
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     vlm_model_id: str = Field(default="PaddleOCR-VL-1.6")
@@ -94,7 +134,7 @@ class ModelConfig(BaseModel):
 
 # --- Ingestion DTOs ---
 
-class IngestSource(BaseModel):
+class IngestSource(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_id: str
@@ -103,7 +143,7 @@ class IngestSource(BaseModel):
     as_of_date_utc: Optional[datetime] = None
 
 
-class RawAttachment(BaseModel):
+class RawAttachment(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     filename: str
@@ -112,7 +152,7 @@ class RawAttachment(BaseModel):
     size_bytes: int
 
 
-class RawIngestPayload(BaseModel):
+class RawIngestPayload(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     source_type: SourceType
@@ -133,7 +173,7 @@ class RawIngestPayload(BaseModel):
 
 # --- Canonical Extracted Text DTO (CAS Tier 1) ---
 
-class ExtractedAttachmentMeta(BaseModel):
+class ExtractedAttachmentMeta(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     filename: str
@@ -142,7 +182,7 @@ class ExtractedAttachmentMeta(BaseModel):
     vlm_markdown: Optional[str] = None
 
 
-class NormalizedDocumentJSON(BaseModel):
+class NormalizedDocumentJSON(SovereignBaseModel):
     """Canonical extracted text & lineage JSON stored in archive/text/*.json.enc.
 
     Permits 100% offline re-indexing without touching Outlook or re-running VLM.
@@ -168,7 +208,7 @@ class NormalizedDocumentJSON(BaseModel):
 
 # --- Chunking & Search DTOs ---
 
-class DocumentChunk(BaseModel):
+class DocumentChunk(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     chunk_id: str
@@ -185,7 +225,7 @@ class DocumentChunk(BaseModel):
     token_count: int
 
 
-class SearchQuery(BaseModel):
+class SearchQuery(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     query_text: str
@@ -196,7 +236,7 @@ class SearchQuery(BaseModel):
     source_type: Optional[SourceType] = None
 
 
-class SearchResult(BaseModel):
+class SearchResult(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     chunk_id: str
@@ -217,7 +257,7 @@ class SearchResult(BaseModel):
 
 # --- Outbox / Replication DTOs ---
 
-class OutboxRecord(BaseModel):
+class OutboxRecord(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
     outbox_id: int

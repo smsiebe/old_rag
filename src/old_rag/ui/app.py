@@ -36,7 +36,7 @@ class BridgeAPI:
                 from old_rag.contracts import SearchQuery
                 q = SearchQuery.model_validate(request)
                 hits = engine.search(q)
-                return {"results": [h.model_dump() for h in hits]}
+                return {"results": [h.model_dump(mode="json") for h in hits]}
             except Exception as e:
                 return {"error": str(e), "results": []}
         return res

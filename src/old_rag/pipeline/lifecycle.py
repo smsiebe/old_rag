@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
+from old_rag.contracts import safe_json_dumps, safe_json_loads
+
 
 def get_sid_and_session_id() -> Tuple[str, str]:
     """Retrieve current Windows user SID and Terminal Services Session ID."""
@@ -149,12 +151,12 @@ class NamedPipeClient:
         self.pipe_name = pipe_name or get_scoped_pipe_name()
 
     def call(self, request_payload: dict, timeout_ms: int = 5000) -> dict:
-        req_str = json.dumps(request_payload)
+        req_str = safe_json_dumps(request_payload)
 
         # 1. In-memory dispatch if available
         if self.pipe_name in NamedPipeServer._in_memory_handlers:
             resp_str = NamedPipeServer._in_memory_handlers[self.pipe_name](req_str)
-            return json.loads(resp_str)
+            return safe_json_loads(resp_str)
 
         # 2. Win32 CallNamedPipe
         if sys.platform == "win32":
@@ -166,7 +168,7 @@ class NamedPipeClient:
                     65536,
                     timeout_ms,
                 )
-                return json.loads(resp_data.decode("utf-8"))
+                return safe_json_loads(resp_data.decode("utf-8"))
             except Exception as e:
                 return {"error": f"Named Pipe IPC failed: {str(e)}"}
 

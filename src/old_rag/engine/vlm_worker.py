@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from old_rag.contracts import ModelConfig
+from old_rag.contracts import ModelConfig, safe_json_dumps, safe_json_loads
 from old_rag.protocols import VLMClientProtocol
 from old_rag.storage.models import ModelResolver
 
@@ -101,7 +101,7 @@ def run_vlm_worker_stdio_loop() -> None:
         if not line:
             continue
         try:
-            req = json.loads(line)
+            req = safe_json_loads(line)
             req_id = req.get("id")
             import base64
             img_bytes = base64.b64decode(req["image_b64"])
@@ -111,6 +111,6 @@ def run_vlm_worker_stdio_loop() -> None:
         except Exception as e:
             res = {"id": req.get("id"), "success": False, "error": str(e)}
 
-        sys.stdout.write(json.dumps(res) + "\n")
+        sys.stdout.write(safe_json_dumps(res) + "\n")
         sys.stdout.flush()
 
