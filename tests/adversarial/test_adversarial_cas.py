@@ -68,3 +68,4 @@ def test_adversarial_empty_payload(cas_engine):
     assert ref
     retrieved = cas_engine.get_blob(empty_sha)
     assert retrieved == b""
+

@@ -42,3 +42,4 @@ def test_adversarial_outbox_unclean_crash_replay(catalog_repo):
         catalog_repo.mark_outbox_committed(rec.outbox_id)
 
     assert len(catalog_repo.get_pending_outbox()) == 0
+

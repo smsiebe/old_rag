@@ -61,3 +61,4 @@ def test_adversarial_numerical_precision_rule18(temp_app_dir):
     # Verify score is not rounded to fewer decimal places
     score_str = f"{c1.rrf_score:.10f}"
     assert not score_str.endswith("00000")
+
