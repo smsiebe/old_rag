@@ -1,3 +1,4 @@
 @echo off
+cd /d "%~dp0"
 set PYTHONPATH=%~dp0src
-"%~dp0..\.venv\Scripts\python.exe" -m old_rag.cli ui
+start "" "%~dp0..\.venv\Scripts\pythonw.exe" -m old_rag.cli ui

@@ -50,10 +50,17 @@ class BridgeAPI:
             from old_rag.storage.catalog import CatalogRepository
             app_dir = get_default_app_data_dir()
             cat = CatalogRepository(app_dir / "catalog.db")
+            doc_count = 0
+            try:
+                row = cat._conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+                if row:
+                    doc_count = row[0]
+            except Exception:
+                pass
             return {
                 "daemon_running": False,
                 "vlm_active": False,
-                "items_indexed": 0,
+                "items_indexed": doc_count,
                 "pending_outbox_count": len(cat.get_pending_outbox()),
                 "classic_outlook_active": not is_new_outlook_active(),
                 "on_battery": False,
@@ -105,6 +112,57 @@ class BridgeAPI:
         return res
 
 
+def ensure_default_desktop() -> None:
+    """Ensure current thread is attached to the user's interactive 'Default' desktop."""
+    if sys.platform != "win32":
+        return
+    try:
+        import win32api
+        import win32con
+        import win32service
+
+        h_default = win32service.OpenDesktop("default", 0, False, win32con.GENERIC_ALL)
+        if h_default:
+            h_default.SetThreadDesktop()
+    except Exception:
+        pass
+
+
+def bring_window_to_front(title: str = "OldRAG Search Companion") -> None:
+    """Bring named window to the foreground on the active desktop."""
+    if sys.platform != "win32":
+        return
+    try:
+        import win32con
+        import win32gui
+
+        hwnd = win32gui.FindWindow(None, title)
+        if hwnd:
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.SetWindowPos(
+                hwnd,
+                win32con.HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+    except Exception:
+        pass
+
+
 def start_hotkey_listener(toggle_window_func):
     """Background Win32 message loop listening for Ctrl+Alt+Space."""
     if sys.platform != "win32":
@@ -112,6 +170,7 @@ def start_hotkey_listener(toggle_window_func):
 
     def _loop():
         try:
+            ensure_default_desktop()
             import win32con
             import win32gui
             # Register HotKey: Ctrl + Alt + Space (ID: 100)
@@ -162,36 +221,75 @@ def run_ui_app() -> None:
     """Entry point for Process 3 (sovereign-rag ui)."""
     import webview
 
+    ensure_default_desktop()
+
     static_dir = Path(__file__).parent / "static"
     index_html = (static_dir / "index.html").resolve()
     file_uri = index_html.as_uri()
+
+    x, y = None, None
+    if sys.platform == "win32":
+        try:
+            import win32api
+            sw = win32api.GetSystemMetrics(0)
+            sh = win32api.GetSystemMetrics(1)
+            x = max(50, (sw - 740) // 2)
+            y = max(50, (sh - 560) // 2)
+        except Exception:
+            pass
 
     api = BridgeAPI()
     window = webview.create_window(
         title="OldRAG Search Companion",
         url=file_uri,
         js_api=api,
-        width=720,
-        height=540,
+        width=740,
+        height=560,
+        x=x,
+        y=y,
         resizable=True,
     )
+
+    icon = None
 
     def toggle_window():
         try:
             window.show()
             window.restore()
+            bring_window_to_front("OldRAG Search Companion")
         except Exception:
             pass
 
     def exit_app():
+        nonlocal icon
+        try:
+            if icon:
+                icon.stop()
+        except Exception:
+            pass
         try:
             window.destroy()
         except Exception:
             pass
 
+    def on_window_closed():
+        nonlocal icon
+        try:
+            if icon:
+                icon.stop()
+        except Exception:
+            pass
+
+    window.events.closed += on_window_closed
+
+    def on_start():
+        import time
+        time.sleep(0.3)
+        bring_window_to_front("OldRAG Search Companion")
+
     # Start helper threads
     start_hotkey_listener(toggle_window)
-    setup_tray_icon(toggle_window, exit_app)
+    icon = setup_tray_icon(toggle_window, exit_app)
 
     # Start on main thread with http_server=False to guarantee zero open network ports!
-    webview.start(http_server=False)
+    webview.start(on_start, http_server=False)
