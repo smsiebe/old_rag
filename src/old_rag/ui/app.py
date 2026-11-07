@@ -11,23 +11,98 @@ from old_rag.pipeline.lifecycle import NamedPipeClient, get_scoped_pipe_name
 
 
 class BridgeAPI:
-    """Exposes window.pywebview.api methods to Javascript over local Named Pipe IPC."""
+    """Exposes window.pywebview.api methods to Javascript over local Named Pipe IPC with in-process fallback."""
 
     def __init__(self, pipe_name: Optional[str] = None):
         self.client = NamedPipeClient(pipe_name)
+        self._cas = None
+        self._search_engine = None
+
+    def _get_in_process_engine(self):
+        if self._search_engine is None:
+            from old_rag.engine.search import HybridSearchEngine
+            from old_rag.storage.cas import CASEngine, get_default_app_data_dir
+            app_dir = get_default_app_data_dir()
+            self._cas = CASEngine()
+            self._search_engine = HybridSearchEngine(fts_db_path=app_dir / "lexical_fts.db")
+        return self._search_engine, self._cas
 
     def search(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return self.client.call({"action": "search", "query": request})
+        res = self.client.call({"action": "search", "query": request})
+        if "error" in res:
+            # Fallback to direct in-process search
+            try:
+                engine, _ = self._get_in_process_engine()
+                from old_rag.contracts import SearchQuery
+                q = SearchQuery.model_validate(request)
+                hits = engine.search(q)
+                return {"results": [h.model_dump() for h in hits]}
+            except Exception as e:
+                return {"error": str(e), "results": []}
+        return res
 
     def get_status(self, _dummy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return self.client.call({"action": "status"})
+        res = self.client.call({"action": "status"})
+        if "error" in res:
+            # In-process status fallback
+            from old_rag.ingest.outlook import is_new_outlook_active
+            from old_rag.storage.cas import get_default_app_data_dir
+            from old_rag.storage.catalog import CatalogRepository
+            app_dir = get_default_app_data_dir()
+            cat = CatalogRepository(app_dir / "catalog.db")
+            return {
+                "daemon_running": False,
+                "vlm_active": False,
+                "items_indexed": 0,
+                "pending_outbox_count": len(cat.get_pending_outbox()),
+                "classic_outlook_active": not is_new_outlook_active(),
+                "on_battery": False,
+            }
+        return res
 
     def open_cached_msg(self, request: Dict[str, Any]) -> Dict[str, Any]:
         doc_id = request.get("doc_id", "")
-        return self.client.call({"action": "open_cached_msg", "doc_id": doc_id})
+        res = self.client.call({"action": "open_cached_msg", "doc_id": doc_id})
+        temp_path = None
+        if "temp_view_path" in res and res.get("success"):
+            temp_path = res["temp_view_path"]
+        elif "error" in res:
+            _, cas = self._get_in_process_engine()
+            p = cas.create_temp_view_file(doc_id)
+            if p:
+                temp_path = str(p)
+                res = {"success": True, "temp_view_path": temp_path}
+
+        if temp_path and sys.platform == "win32":
+            try:
+                import os
+                os.startfile(temp_path)
+            except Exception:
+                pass
+        return res
 
     def reindex(self, _dummy: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return self.client.call({"action": "reindex"})
+        res = self.client.call({"action": "reindex"})
+        if "error" in res:
+            from old_rag.engine.chunker import ParentAwareChunker
+            from old_rag.engine.extractor import DocumentExtractor
+            from old_rag.engine.indexer import IndexEngine
+            from old_rag.pipeline.coordinator import PipelineCoordinator
+            from old_rag.storage.cas import CASEngine, get_default_app_data_dir
+            from old_rag.storage.catalog import CatalogRepository
+            app_dir = get_default_app_data_dir()
+            cas = CASEngine()
+            cat = CatalogRepository(app_dir / "catalog.db")
+            coord = PipelineCoordinator(
+                cas=cas,
+                catalog=cat,
+                extractor=DocumentExtractor(catalog=cat),
+                chunker=ParentAwareChunker(catalog=cat),
+                indexer=IndexEngine(app_dir / "lexical_fts.db"),
+            )
+            count = coord.reindex_all()
+            return {"success": True, "count": count}
+        return res
 
 
 def start_hotkey_listener(toggle_window_func):

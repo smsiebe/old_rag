@@ -91,6 +91,58 @@ def cmd_purge(args: argparse.Namespace) -> None:
     print(res)
 
 
+def cmd_ingest(args: argparse.Namespace) -> None:
+    """Ingest emails from Outlook for the last N days."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    from datetime import datetime, timedelta, timezone
+    from old_rag.storage.cas import CASEngine, get_default_app_data_dir
+    from old_rag.storage.catalog import CatalogRepository
+    from old_rag.engine.extractor import DocumentExtractor
+    from old_rag.engine.chunker import ParentAwareChunker
+    from old_rag.engine.indexer import IndexEngine
+    from old_rag.pipeline.coordinator import PipelineCoordinator
+    from old_rag.ingest.outlook import ClassicMAPIConnector
+
+    days = args.days or 30
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    print(f"Connecting to Classic Outlook MAPI to ingest emails since {since.strftime('%Y-%m-%d %H:%M:%S')} UTC ({days} days)...")
+
+    app_dir = get_default_app_data_dir()
+    cas = CASEngine()
+    catalog = CatalogRepository(app_dir / "catalog.db")
+    extractor = DocumentExtractor(catalog=catalog)
+    chunker = ParentAwareChunker(catalog=catalog)
+    indexer = IndexEngine(app_dir / "lexical_fts.db")
+
+    coord = PipelineCoordinator(
+        cas=cas,
+        catalog=catalog,
+        extractor=extractor,
+        chunker=chunker,
+        indexer=indexer,
+    )
+
+    connector = ClassicMAPIConnector(allow_background_launch=False)
+    folder_list = [args.folder] if args.folder else None
+
+    count = 0
+    try:
+        for payload in connector.poll_messages(folder_names=folder_list, as_of_date_utc=since):
+            count += 1
+            subj = (payload.subject or "(No subject)")[:50]
+            print(f"[{count}] [{payload.folder}] {payload.sender}: {subj}")
+            coord.ingest_payload(payload)
+
+        print(f"\nSuccessfully ingested {count} emails into OldRAG!")
+        print(f"CAS Archive: {cas.archive_dir}")
+        print(f"Index: {app_dir / 'lexical_fts.db'}")
+    except Exception as e:
+        print(f"\nIngestion error: {e}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="old-rag", description="Sovereign local Outlook & file RAG engine")
     subparsers = parser.add_subparsers(dest="command")
@@ -102,6 +154,10 @@ def main() -> None:
     subparsers.add_parser("status", help="Query daemon status")
     subparsers.add_parser("reindex", help="Trigger offline re-indexing from text CAS")
     subparsers.add_parser("purge", help="Purge orphaned blobs from storage")
+
+    ing_parser = subparsers.add_parser("ingest", help="Ingest messages from Outlook for the last N days")
+    ing_parser.add_argument("--days", "-d", type=int, default=30, help="Number of past days to ingest (default: 30)")
+    ing_parser.add_argument("--folder", "-f", type=str, default=None, help="Specific folder to ingest")
 
     exp_parser = subparsers.add_parser("export-key", help="Export encrypted DEK backup")
     exp_parser.add_argument("--output", "-o", help="Target output file path")
@@ -121,6 +177,8 @@ def main() -> None:
         cmd_reindex(args)
     elif args.command == "purge":
         cmd_purge(args)
+    elif args.command == "ingest":
+        cmd_ingest(args)
     elif args.command == "export-key":
         cmd_export_key(args)
     else:

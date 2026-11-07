@@ -12,12 +12,12 @@ from old_rag.ui.app import BridgeAPI
 
 def test_t4_1_bridge_api_mock_call():
     api = BridgeAPI(pipe_name="\\\\.\\pipe\\NonExistentTestPipe")
-    # Calling non-existent pipe should gracefully return error dict rather than crashing
+    # Calling non-existent pipe should gracefully return fallback dict rather than crashing
     res = api.get_status()
-    assert "error" in res
+    assert res["daemon_running"] is False
 
     res_search = api.search({"query_text": "test"})
-    assert "error" in res_search
+    assert "results" in res_search
 
 
 def test_t4_1_bridge_schema_matches_contracts():
@@ -62,4 +62,5 @@ def test_t4_2_cli_argument_parsing():
     assert hasattr(cli_mod, "cmd_status")
     assert hasattr(cli_mod, "cmd_reindex")
     assert hasattr(cli_mod, "cmd_purge")
+    assert hasattr(cli_mod, "cmd_ingest")
     assert hasattr(cli_mod, "cmd_export_key")

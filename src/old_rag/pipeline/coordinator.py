@@ -46,13 +46,7 @@ class PipelineCoordinator(CoordinatorProtocol):
         if payload.raw_msg_bytes:
             raw_msg_cas_ref = self.cas.put_msg(norm_doc.doc_id, payload.raw_msg_bytes)
 
-        # Record blob references in catalog
-        for att in norm_doc.attachments:
-            # Find matching raw attachment size
-            size = next((a.size_bytes for a in payload.attachments if a.filename == att.filename), len(att.blob_hash))
-            self.catalog.record_blob_ref(att.blob_hash, norm_doc.doc_id, size)
-
-        # Upsert document lineage in catalog
+        # Upsert document lineage in catalog FIRST (satisfies foreign key in blob_references)
         self.catalog.upsert_document(
             doc_id=norm_doc.doc_id,
             source_type=norm_doc.source_type.value,
@@ -67,6 +61,14 @@ class PipelineCoordinator(CoordinatorProtocol):
             text_cas_ref=text_cas_ref,
             raw_msg_cas_ref=raw_msg_cas_ref,
         )
+
+        # Record blob references in catalog and persist to CAS Tier 2
+        for att in norm_doc.attachments:
+            raw_att = next((a for a in payload.attachments if a.filename == att.filename), None)
+            size = raw_att.size_bytes if raw_att else len(att.blob_hash)
+            if raw_att and raw_att.data:
+                self.cas.put_blob(att.blob_hash, raw_att.data)
+            self.catalog.record_blob_ref(att.blob_hash, norm_doc.doc_id, size)
 
         # 3. Chunk normalized document
         chunks = self.chunker.chunk(norm_doc)

@@ -50,8 +50,8 @@ class HybridSearchEngine(SearchEngineProtocol):
         self.lancedb_table = lancedb_table
         self.config = config or ModelConfig()
 
-    def _query_fts(self, query: SearchQuery) -> List[Tuple[str, float]]:
-        """Query FTS5 porter and trigram tables, returning list of (chunk_id, bm25_score)."""
+    def _query_fts(self, query: SearchQuery) -> List[Dict[str, Any]]:
+        """Query FTS5 porter and trigram tables, returning list of row dicts."""
         if not self.fts_db_path.exists():
             return []
 
@@ -64,7 +64,9 @@ class HybridSearchEngine(SearchEngineProtocol):
         table = "chunks_fts_trigram" if use_trigram else "chunks_fts_porter"
 
         sql = f"""
-            SELECT chunk_id, bm25({table}) as score
+            SELECT chunk_id, doc_id, content, sender, folder, source_type, received_ts_utc,
+                   bm25({table}) as score,
+                   snippet({table}, 0, '<mark>', '</mark>', '...', 32) as snippet_text
             FROM {table}
             WHERE {table} MATCH ?
         """
@@ -86,7 +88,7 @@ class HybridSearchEngine(SearchEngineProtocol):
         try:
             cur = conn.execute(sql, params)
             rows = cur.fetchall()
-            return [(r["chunk_id"], float(r["score"])) for r in rows]
+            return [dict(r) for r in rows]
         except Exception:
             return []
         finally:
@@ -96,8 +98,6 @@ class HybridSearchEngine(SearchEngineProtocol):
         """Query LanceDB vector index with prefilter=True."""
         if not self.lancedb_table:
             return []
-        # In a real environment, query_text is embedded with fastembed
-        # and queried against lancedb_table.search(vector).where(...).to_pandas()
         return []
 
     def search(self, query: SearchQuery) -> List[SearchResult]:
@@ -109,7 +109,14 @@ class HybridSearchEngine(SearchEngineProtocol):
         has_identifier = any(is_identifier_like(t) for t in raw_tokens)
 
         # Build rank maps (1-based)
-        lexical_ranks: Dict[str, int] = {cid: idx + 1 for idx, (cid, _) in enumerate(lexical_hits)}
+        lexical_ranks: Dict[str, int] = {}
+        lexical_rows: Dict[str, Dict[str, Any]] = {}
+        for idx, item in enumerate(lexical_hits):
+            cid = item["chunk_id"] if isinstance(item, dict) else item[0]
+            lexical_ranks[cid] = idx + 1
+            if isinstance(item, dict):
+                lexical_rows[cid] = item
+
         vector_ranks: Dict[str, int] = {cid: idx + 1 for idx, (cid, _) in enumerate(vector_hits)}
 
         all_chunk_ids: Set[str] = set(lexical_ranks.keys()) | set(vector_ranks.keys())
@@ -123,6 +130,7 @@ class HybridSearchEngine(SearchEngineProtocol):
         for cid in all_chunk_ids:
             l_rank = lexical_ranks.get(cid)
             v_rank = vector_ranks.get(cid)
+            l_row = lexical_rows.get(cid, {})
 
             # RRF calculation in exact IEEE 754 float64
             rrf = 0.0
@@ -143,15 +151,29 @@ class HybridSearchEngine(SearchEngineProtocol):
             else:
                 tier = RelevanceTier.LOW
 
-            doc_id = cid.rsplit("_", 1)[0] if "_" in cid else cid
+            doc_id = l_row.get("doc_id") or (cid.rsplit("_", 1)[0] if "_" in cid else cid)
+            content_text = l_row.get("snippet_text") or l_row.get("content") or f"Content for chunk {cid}"
+            sender_val = l_row.get("sender") or query.sender
+            folder_val = l_row.get("folder") or query.folder
+            source_type_val = SourceType(l_row["source_type"]) if l_row.get("source_type") in ("EMAIL", "FILE") else SourceType.EMAIL
+
+            ts_val = None
+            if l_row.get("received_ts_utc"):
+                try:
+                    from datetime import datetime
+                    ts_val = datetime.fromisoformat(l_row["received_ts_utc"])
+                except Exception:
+                    pass
+
             scored_results.append(
                 SearchResult(
                     chunk_id=cid,
                     doc_id=doc_id,
-                    content=f"Content for chunk {cid}",
-                    source_type=SourceType.EMAIL,
-                    sender=query.sender,
-                    folder=query.folder,
+                    content=content_text,
+                    source_type=source_type_val,
+                    sender=sender_val,
+                    folder=folder_val,
+                    received_ts_utc=ts_val,
                     has_archived_msg=True,
                     lexical_rank=l_rank,
                     vector_rank=v_rank,

@@ -57,7 +57,10 @@ def probe_object_model_guard(timeout_sec: float = 2.0) -> bool:
             import win32com.client
             pythoncom.CoInitialize()
             try:
-                outlook = win32com.client.GetActiveObject("Outlook.Application")
+                try:
+                    outlook = win32com.client.GetActiveObject("Outlook.Application")
+                except Exception:
+                    outlook = win32com.client.Dispatch("Outlook.Application")
                 ns = outlook.GetNamespace("MAPI")
                 inbox = ns.GetDefaultFolder(6)  # olFolderInbox = 6
                 # Test reading item count and first item property
@@ -126,10 +129,10 @@ class ClassicMAPIConnector:
             try:
                 outlook = win32com.client.GetActiveObject("Outlook.Application")
             except Exception:
-                if self.allow_background_launch:
+                try:
                     outlook = win32com.client.Dispatch("Outlook.Application")
-                else:
-                    raise ServiceUnavailableError("Classic Outlook is not currently running.")
+                except Exception as e:
+                    raise ServiceUnavailableError(f"Classic Outlook COM connection failed: {str(e)}")
 
             ns = outlook.GetNamespace("MAPI")
             folders_to_poll = []
@@ -203,6 +206,35 @@ class ClassicMAPIConnector:
                             except Exception:
                                 pass
 
+                    # Extract received time
+                    received_time = getattr(item, "ReceivedTime", None)
+                    dt_received = None
+                    if received_time:
+                        try:
+                            dt_received = datetime(
+                                received_time.year, received_time.month, received_time.day,
+                                received_time.hour, received_time.minute, received_time.second,
+                                tzinfo=timezone.utc,
+                            )
+                        except Exception:
+                            dt_received = datetime.now(timezone.utc)
+                    else:
+                        dt_received = datetime.now(timezone.utc)
+
+                    # Save raw .msg Unicode for recovery
+                    raw_msg_bytes = None
+                    try:
+                        import tempfile
+                        with tempfile.NamedTemporaryFile(suffix=".msg", delete=False) as tf:
+                            temp_msg_path = tf.name
+                        item.SaveAs(temp_msg_path, self.OL_MSG_UNICODE)
+                        with open(temp_msg_path, "rb") as mf:
+                            raw_msg_bytes = mf.read()
+                        import os
+                        os.unlink(temp_msg_path)
+                    except Exception:
+                        pass
+
                     payload = RawIngestPayload(
                         source_type=SourceType.EMAIL,
                         doc_id=doc_id,
@@ -213,10 +245,11 @@ class ClassicMAPIConnector:
                         sender=sender,
                         subject=subject,
                         folder=folder.Name,
-                        received_ts_utc=datetime.now(timezone.utc),
+                        received_ts_utc=dt_received,
                         body_text=body_text,
                         body_html=body_html,
                         attachments=raw_attachments,
+                        raw_msg_bytes=raw_msg_bytes,
                     )
                     yield payload
                     count += 1

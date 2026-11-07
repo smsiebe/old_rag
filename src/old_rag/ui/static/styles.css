@@ -108,6 +108,14 @@ button:hover {
     line-height: 1.4;
 }
 
+mark {
+    background: #fab005;
+    color: #1a1b1e;
+    font-weight: 600;
+    padding: 1px 3px;
+    border-radius: 3px;
+}
+
 .action-link {
     display: inline-block;
     margin-top: 8px;

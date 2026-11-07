@@ -49,7 +49,7 @@ document.addEventListener("DOMContentLoaded", function () {
             if (item.folder) html += "<span>Folder: " + escapeHtml(item.folder) + "</span>";
             html += "</div>";
 
-            html += "<div class='card-content'>" + escapeHtml(item.content) + "</div>";
+            html += "<div class='card-content'>" + formatSnippet(item.content) + "</div>";
 
             if (item.has_archived_msg) {
                 html += "<a class='action-link' onclick='openMsg(\"" + item.doc_id + "\")'>Open Cached .msg Copy</a>";
@@ -68,6 +68,12 @@ document.addEventListener("DOMContentLoaded", function () {
     function escapeHtml(text) {
         if (!text) return "";
         return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function formatSnippet(text) {
+        if (!text) return "";
+        var safe = escapeHtml(text);
+        return safe.replace(/&lt;mark&gt;/g, "<mark>").replace(/&lt;\/mark&gt;/g, "</mark>");
     }
 });
 
