@@ -1,7 +1,8 @@
-"""extractor.py - Deterministic Document Extractors with Conditional VLM Gating."""
+"""extractor.py - Document Extractor delegating to Scryer with Catalog VLM Caching."""
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import io
 import re
@@ -14,8 +15,11 @@ from old_rag.contracts import (
     NormalizedDocumentJSON,
     RawIngestPayload,
     SourceType,
+    safe_json_dumps,
 )
 from old_rag.protocols import CatalogProtocol, ExtractorProtocol, VLMClientProtocol
+from scryer.contracts import ScryerExtractionOptions
+from scryer.extractor import ScryerExtractor
 
 
 def strip_html_tags(html: str) -> str:
@@ -26,76 +30,56 @@ def strip_html_tags(html: str) -> str:
 
 
 class DocumentExtractor(ExtractorProtocol):
-    """Deterministic document parser for PDF, DOCX, XLSX, PPTX, EML with VLM fallback."""
+    """Document parser leveraging Scryer with Catalog VLM caching and backward-compatible fallback."""
 
     def __init__(
         self,
         catalog: Optional[CatalogProtocol] = None,
         vlm_client: Optional[VLMClientProtocol] = None,
+        scryer_extractor: Optional[ScryerExtractor] = None,
     ):
         self.catalog = catalog
         self.vlm_client = vlm_client
+        self.scryer = scryer_extractor or ScryerExtractor()
 
     def can_extract(self, filename: str) -> bool:
-        ext = Path(filename).suffix.lower()
-        return ext in {".pdf", ".docx", ".xlsx", ".pptx", ".eml", ".txt", ".md", ".png", ".jpg", ".jpeg"}
+        return self.scryer.parser_registry.can_parse(filename)
 
     def extract_docx(self, data: bytes) -> str:
-        try:
-            import docx
-            doc = docx.Document(io.BytesIO(data))
-            parts = [p.text for p in doc.paragraphs if p.text.strip()]
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = " | ".join(c.text.strip() for c in row.cells if c.text.strip())
-                    if row_text:
-                        parts.append(row_text)
-            return "\n\n".join(parts)
-        except Exception:
-            return ""
+        res = self.scryer.parser_registry.parse(data, "document.docx")
+        return res.raw_text
 
     def extract_xlsx(self, data: bytes) -> str:
-        try:
-            import openpyxl
-            wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
-            parts = []
-            for sheetname in wb.sheetnames:
-                sheet = wb[sheetname]
-                parts.append(f"# Sheet: {sheetname}")
-                for row in sheet.iter_rows(values_only=True):
-                    row_vals = [str(v).strip() for v in row if v is not None and str(v).strip()]
-                    if row_vals:
-                        parts.append(" | ".join(row_vals))
-            return "\n\n".join(parts)
-        except Exception:
-            return ""
+        res = self.scryer.parser_registry.parse(data, "workbook.xlsx")
+        return res.raw_text
 
     def extract_pdf(self, data: bytes) -> str:
-        try:
-            import pypdfium2 as pdfium
-            pdf = pdfium.PdfDocument(data)
-            pages = []
-            for i in range(len(pdf)):
-                page = pdf[i]
-                textpage = page.get_textpage()
-                page_text = textpage.get_text_range()
-                if len(page_text.strip()) < 30 and self.vlm_client:
-                    # Gated VLM inference for scanned / visual page
-                    try:
-                        pil_image = page.render(scale=2.0).to_pil()
-                        img_buf = io.BytesIO()
-                        pil_image.save(img_buf, format="PNG")
+        opts = ScryerExtractionOptions(min_text_threshold=30, extract_images=True)
+        res = self.scryer.parser_registry.parse(data, "document.pdf", options=opts)
+
+        # If low-text pages were detected and vlm_client is provided, use vlm_client for low text pages
+        if res.low_text_pages and self.vlm_client and res.visual_elements:
+            merged_pages = []
+            page_text_map = {idx + 1: t for idx, t in enumerate(res.page_texts)}
+            rendered_map = {
+                elem.page_number: elem
+                for elem in res.visual_elements
+                if elem.element_type == "rendered_page"
+            }
+            for p_num in range(1, res.metadata.page_count + 1):
+                if p_num in res.low_text_pages and p_num in rendered_map:
+                    elem = rendered_map[p_num]
+                    if elem.data_base64:
+                        img_bytes = base64.b64decode(elem.data_base64)
                         vlm_markdown = self.vlm_client.extract_image_markdown(
-                            img_buf.getvalue(), f"page_{i+1}.png"
+                            img_bytes, f"page_{p_num}.png"
                         )
-                        pages.append(vlm_markdown)
+                        merged_pages.append(vlm_markdown)
                         continue
-                    except Exception:
-                        pass
-                pages.append(page_text)
-            return "\n\n".join(pages)
-        except Exception:
-            return ""
+                merged_pages.append(page_text_map.get(p_num, ""))
+            return "\n\n".join(merged_pages)
+
+        return res.raw_text
 
     def extract(self, payload: RawIngestPayload) -> NormalizedDocumentJSON:
         body_text = payload.body_text or ""
@@ -120,13 +104,25 @@ class DocumentExtractor(ExtractorProtocol):
                 att_text = self.extract_xlsx(att.data)
             elif ext == ".pdf":
                 att_text = self.extract_pdf(att.data)
-            elif ext in {".png", ".jpg", ".jpeg"} and not vlm_markdown and self.vlm_client:
-                # Check VLM skip list
+            elif ext in {".png", ".jpg", ".jpeg"} and not vlm_markdown:
                 should_skip = self.catalog.is_vlm_skipped(blob_hash) if self.catalog else False
                 if not should_skip:
-                    vlm_markdown = self.vlm_client.extract_image_markdown(att.data, att.filename)
+                    if self.vlm_client:
+                        vlm_markdown = self.vlm_client.extract_image_markdown(att.data, att.filename)
+                    else:
+                        scryer_res = self.scryer.extract(att.data, filename=att.filename)
+                        if scryer_res.structured_data:
+                            vlm_markdown = "<!-- Scryer Structured Context -->\n" + safe_json_dumps(
+                                scryer_res.structured_data, indent=2
+                            )
+                        elif scryer_res.raw_text:
+                            vlm_markdown = scryer_res.raw_text
+
                     if self.catalog and vlm_markdown:
                         self.catalog.put_vlm_cache(blob_hash, vlm_markdown)
+            elif ext in {".txt", ".md", ".csv", ".json", ".pptx", ".eml", ".msg"}:
+                res = self.scryer.extract(att.data, filename=att.filename)
+                att_text = res.raw_text
 
             if att_text:
                 body_text += f"\n\n--- Attachment: {att.filename} ---\n{att_text}"
@@ -153,6 +149,4 @@ class DocumentExtractor(ExtractorProtocol):
             received_ts_utc=payload.received_ts_utc,
             clean_body_text=body_text.strip(),
             attachments=extracted_attachments,
-            extracted_at_utc=datetime.now(timezone.utc),
         )
-
