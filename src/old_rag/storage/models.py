@@ -74,5 +74,53 @@ class ModelResolver(ModelResolverProtocol):
         embedder_dir = self.models_dir / "nomic-embed-text-v1.5"
         embedder_dir.mkdir(parents=True, exist_ok=True)
         tokenizer_path = embedder_dir / "tokenizer.json"
+
+        # If tokenizer not in embedder_dir, check default app data dir or HF snapshot
+        if not tokenizer_path.exists():
+            default_tok = get_default_app_data_dir() / "models" / "nomic-embed-text-v1.5" / "tokenizer.json"
+            if default_tok.exists():
+                import shutil
+                shutil.copy2(default_tok, tokenizer_path)
+            else:
+                # Search models directory for any downloaded tokenizer.json
+                for found in self.models_dir.glob("**/tokenizer.json"):
+                    if found != tokenizer_path:
+                        import shutil
+                        shutil.copy2(found, tokenizer_path)
+                        break
+
         return str(embedder_dir), str(tokenizer_path)
+
+    def get_text_embedding_model(self):
+        """Return cached FastEmbed TextEmbedding instance.
+        
+        Uses local cache directory; falls back to default OldRAG models directory
+        if running within an isolated test directory.
+        """
+        if getattr(self, "_embedder_model", None) is not None:
+            return self._embedder_model
+
+        from fastembed import TextEmbedding
+
+        cache_dir = self.models_dir
+        # If cache_dir does not contain models--nomic-ai--nomic-embed-text-v1.5, check default models dir
+        default_models_dir = get_default_app_data_dir() / "models"
+        has_local_model = (cache_dir / "models--nomic-ai--nomic-embed-text-v1.5").exists()
+        if not has_local_model and (default_models_dir / "models--nomic-ai--nomic-embed-text-v1.5").exists():
+            cache_dir = default_models_dir
+
+        try:
+            self._embedder_model = TextEmbedding(
+                model_name=self.config.embedder_model_name,
+                cache_dir=str(cache_dir),
+                local_files_only=True,
+            )
+        except Exception:
+            # Fallback to online/auto-resolve if offline load fails
+            self._embedder_model = TextEmbedding(
+                model_name=self.config.embedder_model_name,
+                cache_dir=str(cache_dir),
+            )
+        return self._embedder_model
+
 

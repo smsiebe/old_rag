@@ -3,22 +3,730 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OldRAG Search</title>
+    <title>OldRAG Sovereign Personal Retrieval &amp; Mail</title>
     <link rel="stylesheet" href="styles.css">
-    <!-- Load classic IIFE bridge script strictly before app logic -->
     <script src="bridge.js"></script>
     <script src="app.js"></script>
 </head>
 <body>
-    <div class="search-container">
-        <input type="text" id="search-input" placeholder="Search Outlook emails and local files (e.g. SN-4471-AB)..." autofocus>
-        <button id="search-btn">Search</button>
+    <div class="app-layout">
+        <!-- Top Navigation Bar -->
+        <header class="top-nav">
+            <div class="brand">
+                <span class="brand-logo">🛡️</span>
+                <span class="brand-title">OldRAG</span>
+                <span class="sovereign-tag">100% Sovereign &amp; Offline</span>
+            </div>
+            <nav class="nav-tabs">
+                <button class="nav-tab active" data-tab="tab-mail">📧 Mail</button>
+                <button class="nav-tab" data-tab="tab-calendar">📅 Calendar</button>
+                <button class="nav-tab" data-tab="tab-search">🔍 Global Search</button>
+            </nav>
+            <div class="nav-right">
+                <!-- Compact Admin & Settings Dropdown Menu -->
+                <div class="admin-dropdown-wrap" id="admin-dropdown-wrap">
+                    <button class="admin-dropdown-btn" id="admin-dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Administration &amp; System Configuration">
+                        <span class="admin-icon">⚙️</span>
+                        <span class="admin-text">Admin ▾</span>
+                    </button>
+                    <div class="admin-dropdown-menu" id="admin-dropdown-menu">
+                        <button class="dropdown-item" data-tab="tab-overview">
+                            <span class="dropdown-item-icon">📊</span>
+                            <div class="dropdown-item-content">
+                                <div class="dropdown-item-title">System Overview</div>
+                                <div class="dropdown-item-desc">Ingestion nodes &amp; live health</div>
+                            </div>
+                        </button>
+                        <button class="dropdown-item" data-tab="tab-accounts">
+                            <span class="dropdown-item-icon">📬</span>
+                            <div class="dropdown-item-content">
+                                <div class="dropdown-item-title">Accounts &amp; Shared Folders</div>
+                                <div class="dropdown-item-desc">IMAP, Exchange, Head-of-Folder</div>
+                            </div>
+                        </button>
+                        <button class="dropdown-item" data-tab="tab-storage">
+                            <span class="dropdown-item-icon">💾</span>
+                            <div class="dropdown-item-content">
+                                <div class="dropdown-item-title">Storage &amp; Privacy</div>
+                                <div class="dropdown-item-desc">Archive boundaries &amp; CAS cleanup</div>
+                            </div>
+                        </button>
+                        <button class="dropdown-item" data-tab="tab-metrics">
+                            <span class="dropdown-item-icon">📈</span>
+                            <div class="dropdown-item-content">
+                                <div class="dropdown-item-title">Retrieval Metrics</div>
+                                <div class="dropdown-item-desc">Engine synergy &amp; value proposition</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="status-indicator">
+                    <span id="daemon-status-dot" class="status-dot"></span>
+                    <span id="daemon-status-text">Checking...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- TAB 1: FULL MAIL CLIENT -->
+            <section id="tab-mail" class="tab-pane active full-height-pane">
+                <div class="mail-client-layout">
+                    <!-- Left Sidebar: Account Switcher & Folders -->
+                    <aside class="mail-sidebar">
+                        <div class="mail-sidebar-header">
+                            <button id="mail-compose-btn" class="btn btn-primary btn-block">✏️ Compose Email</button>
+                            <div class="account-select-wrap">
+                                <label for="mail-account-select">Account:</label>
+                                <select id="mail-account-select" class="form-select full-width">
+                                    <option value="ALL">All Accounts (Unified)</option>
+                                    <!-- Populated dynamically -->
+                                </select>
+                            </div>
+                        </div>
+
+                        <nav class="mail-folders-list" id="mail-folders-nav">
+                            <button class="folder-btn active" data-folder="ALL">
+                                <span>📥 All Mail</span>
+                                <span class="folder-count" id="count-all">0</span>
+                            </button>
+                            <button class="folder-btn" data-folder="Inbox">
+                                <span>📬 Inbox</span>
+                                <span class="folder-count" id="count-inbox">0</span>
+                            </button>
+                            <button class="folder-btn" data-folder="Sent Items">
+                                <span>📤 Sent Items</span>
+                            </button>
+                            <button class="folder-btn" data-folder="Drafts">
+                                <span>📝 Drafts</span>
+                            </button>
+                            <button class="folder-btn" data-folder="Archive">
+                                <span>🗄️ Archive</span>
+                            </button>
+                            <button class="folder-btn" data-folder="Deleted Items">
+                                <span>🗑️ Trash</span>
+                            </button>
+                            <div class="folders-subhead">Custom Folders</div>
+                            <div id="custom-folders-container">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </nav>
+                    </aside>
+
+                    <!-- Middle Pane: Message List -->
+                    <div class="mail-message-list-pane">
+                        <div class="mail-list-toolbar">
+                            <div class="mail-search-wrapper">
+                                <span class="mail-search-icon">🔍</span>
+                                <input type="text" id="mail-search-filter" class="form-input" placeholder="Search emails with hybrid AI retrieval (e.g. 'lease documents')...">
+                                <button id="mail-search-clear-btn" class="mail-clear-btn" title="Clear search" style="display:none;">&times;</button>
+                            </div>
+                            <button id="mail-refresh-btn" class="btn btn-secondary btn-icon" title="Refresh messages">🔄</button>
+                        </div>
+                        <div class="mail-items-container" id="mail-items-list">
+                            <div class="loading-placeholder">Loading mail messages...</div>
+                        </div>
+                    </div>
+
+                    <!-- Right Pane: Reading Pane -->
+                    <div class="mail-reading-pane" id="mail-reading-pane">
+                        <div class="empty-state reading-empty">
+                            <div class="empty-icon">✉️</div>
+                            <h3>Select an email to read</h3>
+                            <p>Choose any message from the list to display its complete body, recipients, and attachments.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: CALENDAR -->
+            <section id="tab-calendar" class="tab-pane">
+                <div class="calendar-header-bar">
+                    <div class="cal-nav-group">
+                        <button id="cal-prev-btn" class="btn btn-secondary">&lt;</button>
+                        <button id="cal-today-btn" class="btn btn-secondary">Today</button>
+                        <button id="cal-next-btn" class="btn btn-secondary">&gt;</button>
+                        <h2 id="cal-month-title">November 2026</h2>
+                    </div>
+                    <div class="cal-view-group">
+                        <button id="cal-view-month" class="btn btn-secondary active">Month Grid</button>
+                        <button id="cal-view-agenda" class="btn btn-secondary">Agenda List</button>
+                        <button id="cal-new-event-btn" class="btn btn-primary">➕ New Event</button>
+                    </div>
+                </div>
+
+                <!-- Calendar Month Grid -->
+                <div id="cal-month-grid-wrap" class="calendar-month-grid-wrap">
+                    <div class="cal-days-header">
+                        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+                    </div>
+                    <div id="cal-cells-grid" class="cal-cells-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <!-- Calendar Agenda View -->
+                <div id="cal-agenda-wrap" class="calendar-agenda-wrap" style="display:none;">
+                    <div id="cal-agenda-list" class="agenda-list">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: HYBRID SEARCH -->
+            <section id="tab-search" class="tab-pane">
+                <div class="search-bar-row">
+                    <div class="search-input-wrapper">
+                        <input type="text" id="search-input" placeholder="Search emails, documents, or identifiers (e.g. 'give me stuff about my lease' or 'SN-4471-AB')...">
+                        <button id="search-clear-btn" class="clear-btn" title="Clear search">&times;</button>
+                    </div>
+                    <button id="search-btn" class="btn btn-primary">Search</button>
+                </div>
+
+                <div class="search-controls-bar">
+                    <div class="control-group">
+                        <label for="sort-select">Sort By:</label>
+                        <select id="sort-select" class="form-select">
+                            <option value="relevance">Best Relevance</option>
+                            <option value="date-desc">Newest Date First</option>
+                            <option value="date-asc">Oldest Date First</option>
+                            <option value="confidence">Highest Confidence</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group">
+                        <label for="source-filter">Source:</label>
+                        <select id="source-filter" class="form-select">
+                            <option value="ALL">All Sources</option>
+                            <option value="EMAIL">📧 Emails Only</option>
+                            <option value="FILE">📁 Files Only</option>
+                        </select>
+                    </div>
+
+                    <div class="control-group slider-group">
+                        <div class="slider-header">
+                            <label for="confidence-slider">Min Confidence:</label>
+                            <span id="confidence-val" class="slider-val">0%</span>
+                        </div>
+                        <input type="range" id="confidence-slider" min="0" max="100" value="0" step="5" class="range-slider">
+                    </div>
+
+                    <div class="tier-filter-pills">
+                        <button class="pill-btn active" data-tier="ALL">All</button>
+                        <button class="pill-btn" data-tier="HIGH">High (≥65%)</button>
+                        <button class="pill-btn" data-tier="MEDIUM">Med (≥45%)</button>
+                        <button class="pill-btn" data-tier="LOW">Low (&lt;45%)</button>
+                    </div>
+
+                    <div class="results-stats">
+                        <span id="results-count-text">Ready</span>
+                    </div>
+                </div>
+
+                <div id="results-list" class="results-container">
+                    <div class="empty-state">
+                        <div class="empty-icon">📂</div>
+                        <h3>Search Local Sovereign Archive</h3>
+                        <p>Type keywords, natural phrases, or exact serial numbers above.<br>All queries are processed 100% on-device with zero telemetry.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: OVERVIEW -->
+            <section id="tab-overview" class="tab-pane">
+                <div class="section-header">
+                    <div>
+                        <h2>System Overview &amp; Health</h2>
+                        <p class="subtitle">Real-time status of ingestion engines, background workers, and encrypted storage.</p>
+                    </div>
+                    <div class="header-action-group">
+                        <button class="btn btn-secondary nav-return-btn" data-return="tab-mail">← Back to Mail</button>
+                        <button id="overview-refresh-btn" class="btn btn-secondary">🔄 Refresh Overview</button>
+                    </div>
+                </div>
+
+                <div class="sovereign-banner">
+                    <div class="banner-icon">🛡️</div>
+                    <div class="banner-body">
+                        <strong>Air-Gapped Sovereign Guarantee</strong>
+                        <p>All embeddings (Nomic ONNX), vector searches (LanceDB), and lexical indices (SQLite FTS5) run purely in-process. Zero outbound telemetry or cloud requests.</p>
+                    </div>
+                    <span class="badge badge-success">Sovereign Active</span>
+                </div>
+
+                <h3 class="subsection-title">Connection &amp; Ingestion Nodes</h3>
+                <div id="connection-grid" class="connection-grid">
+                    <div class="loading-placeholder">Loading connections...</div>
+                </div>
+
+                <div class="card overview-action-card">
+                    <div class="action-card-header">
+                        <h3>Archive Ingestion &amp; Reindex Control</h3>
+                        <span id="items-indexed-stat" class="badge badge-info">0 Items Ingested</span>
+                    </div>
+                    <p>Re-chunk text with WordPiece and regenerate vector embeddings across all cached encrypted CAS documents without re-polling Outlook.</p>
+                    <div class="action-btn-row">
+                        <button id="reindex-btn" class="btn btn-warning">⚡ Reindex All Cached Documents</button>
+                        <span id="reindex-status" class="status-inline"></span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: ACCOUNTS & FOLDERS -->
+            <section id="tab-accounts" class="tab-pane">
+                <div class="section-header">
+                    <div>
+                        <h2>Email Accounts &amp; Shared Folders</h2>
+                        <p class="subtitle">Connect any number of Exchange, Outlook, IMAP, and Gmail accounts, and manage shared filesystem indices.</p>
+                    </div>
+                    <div class="header-action-group">
+                        <button class="btn btn-secondary nav-return-btn" data-return="tab-mail">← Back to Mail</button>
+                        <button id="add-account-btn" class="btn btn-primary">➕ Add Email Account</button>
+                    </div>
+                </div>
+
+                <div id="accounts-save-alert" class="alert-box alert-success" style="display:none;"></div>
+
+                <!-- Configured Accounts List -->
+                <h3 class="subsection-title">Active Email Connections</h3>
+                <div id="accounts-cards-container" class="accounts-grid">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- Shared Filesystem Folders & Head-of-Folder Indexing -->
+                <h3 class="subsection-title" style="margin-top:28px;">Shared Filesystem Folders &amp; Head-of-Folder Caches</h3>
+                <div class="card">
+                    <p>Place indexes directly at the head of monitored folders (<code>&lt;folder&gt;/.oldrag/index.db</code>) with cooperative file locking (<code>.oldrag/index.lock</code>) for concurrent multi-user shared drives.</p>
+                    
+                    <div class="form-row">
+                        <div class="form-col full-width">
+                            <label>Add Shared Folder to Monitor &amp; Index:</label>
+                            <div class="input-with-btn">
+                                <input type="text" id="fs-add-path-input" class="form-input" placeholder="D:\SharedProjects\ProjectAlpha">
+                                <button id="fs-add-and-scan-btn" class="btn btn-secondary">Index Shared Folder</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="shared-folders-container" class="shared-folders-list">
+                        <!-- Populated dynamically -->
+                    </div>
+
+                    <!-- AuraGrid Enterprise Callout -->
+                    <div class="auragrid-callout">
+                        <div class="auragrid-badge">🚀 AuraGrid Enterprise Mesh</div>
+                        <p>Head-of-Folder file locking (<code>.oldrag/index.lock</code>) prevents concurrent collisions across local users. For enterprise multi-master mesh synchronization without lock contention across remote edge nodes, upgrade to <strong>AuraGrid</strong>.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 6: STORAGE & PRIVACY -->
+            <section id="tab-storage" class="tab-pane">
+                <div class="section-header">
+                    <div>
+                        <h2>Storage Management &amp; Privacy Audit</h2>
+                        <p class="subtitle">Audit archive security boundaries, inspect disk usage across CAS tiers, and purge temporary view sweeps.</p>
+                    </div>
+                    <div class="header-action-group">
+                        <button class="btn btn-secondary nav-return-btn" data-return="tab-mail">← Back to Mail</button>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Archive Storage Location</h3>
+                    <p>The sovereign archive directory houses DPAPI/AES-256 encrypted CAS blocks, SQLite databases, and LanceDB vector files.</p>
+                    
+                    <div class="form-row">
+                        <div class="form-col full-width">
+                            <label>Application Data Path:</label>
+                            <div class="input-with-btn">
+                                <input type="text" id="storage-path-input" class="form-input" placeholder="%LOCALAPPDATA%\OldRAG">
+                                <button id="storage-save-path-btn" class="btn btn-primary">Apply Location</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="privacy-alert-box" class="alert-box alert-success">
+                        <strong>🛡️ Storage Boundary Safe:</strong> Archive resides within the local private user profile.
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="action-card-header">
+                        <div>
+                            <h3>Disk Usage Breakdown</h3>
+                            <p class="subtitle">Live disk utilization across CAS tiers, models, and index files.</p>
+                        </div>
+                        <div class="total-disk-badge">
+                            Total: <strong id="storage-total-bytes">0 MB</strong>
+                        </div>
+                    </div>
+
+                    <div id="storage-breakdown-grid" class="storage-breakdown-grid">
+                        <div class="loading-placeholder">Calculating storage metrics...</div>
+                    </div>
+
+                    <div class="sweep-views-row">
+                        <div>
+                            <strong>Decrypted Temporary Views Sweep</strong>
+                            <p class="form-hint">Decrypted .msg or attachment files created for Windows shell viewing are cached in views/. Sweeping deletes all plaintext view copies.</p>
+                        </div>
+                        <button id="sweep-views-btn" class="btn btn-warning">🧹 Sweep Temporary Views</button>
+                    </div>
+                    <div id="sweep-status" class="status-inline"></div>
+                </div>
+            </section>
+
+            <!-- TAB 7: METRICS -->
+            <section id="tab-metrics" class="tab-pane">
+                <div class="section-header">
+                    <div>
+                        <h2>Retrieval Metrics &amp; Value Proposition</h2>
+                        <p class="subtitle">Quantifiable statistics demonstrating retrieval efficiency, hybrid engine synergy, and storage deduplication savings.</p>
+                    </div>
+                    <div class="header-action-group">
+                        <button class="btn btn-secondary nav-return-btn" data-return="tab-mail">← Back to Mail</button>
+                        <button id="metrics-refresh-btn" class="btn btn-secondary">🔄 Refresh Metrics</button>
+                    </div>
+                </div>
+
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-icon">🔍</div>
+                        <div class="metric-val" id="metric-total-queries">0</div>
+                        <div class="metric-label">Total Prompts / Queries</div>
+                        <div class="metric-sub">Served locally without cloud latency</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-icon">⚡</div>
+                        <div class="metric-val text-success" id="metric-hybrid-pct">0%</div>
+                        <div class="metric-label">Hybrid RRF Synergy</div>
+                        <div class="metric-sub" id="metric-hybrid-sub">0 resolved by dual-engine</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-icon">🧠</div>
+                        <div class="metric-val text-primary" id="metric-vector-pct">0%</div>
+                        <div class="metric-label">Semantic Vector Retrieval</div>
+                        <div class="metric-sub" id="metric-vector-sub">0 resolved by meaning</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-icon">🔤</div>
+                        <div class="metric-val text-warning" id="metric-lexical-pct">0%</div>
+                        <div class="metric-label">Lexical / Identifier Hits</div>
+                        <div class="metric-sub" id="metric-lexical-sub">0 resolved by keyword/stemming</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-icon">💾</div>
+                        <div class="metric-val text-success" id="metric-storage-saved">0 MB</div>
+                        <div class="metric-label">CAS Deduplication Saved</div>
+                        <div class="metric-sub">Single-instance storage of identical attachments</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-icon">📦</div>
+                        <div class="metric-val" id="metric-total-docs">0</div>
+                        <div class="metric-label">Indexed Documents &amp; Chunks</div>
+                        <div class="metric-sub" id="metric-docs-sub">0 chunks in LanceDB</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h3>Recent Sovereign Search Queries</h3>
+                    <p class="subtitle">Audit log of recently resolved queries and retrieval channels (Stored locally in catalog.db).</p>
+                    <div class="table-responsive">
+                        <table class="metrics-table">
+                            <thead>
+                                <tr>
+                                    <th>Query Text</th>
+                                    <th>Resolution Engine</th>
+                                    <th>Hits</th>
+                                    <th>Top Confidence</th>
+                                    <th>Executed (UTC)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recent-queries-tbody">
+                                <tr>
+                                    <td colspan="5" class="text-center">No queries logged yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
-    <div id="results-list" class="results-list">
-        <div style="color: #909296; padding: 12px; text-align: center;">
-            Type a query or identifier above to search across local Outlook and indexed documents.
+
+    <!-- MODAL 1: COMPOSE EMAIL -->
+    <div id="modal-compose" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-lg">
+            <div class="modal-header">
+                <h3>✏️ New Email Message</h3>
+                <button type="button" class="modal-close" id="modal-compose-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>From Account:</label>
+                        <select id="compose-account-select" class="form-select full-width">
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>To:</label>
+                        <input type="text" id="compose-to" class="form-input" placeholder="recipient@example.com">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>Cc (optional):</label>
+                        <input type="text" id="compose-cc" class="form-input" placeholder="colleague@example.com">
+                    </div>
+                    <div class="form-col">
+                        <label>Bcc (optional):</label>
+                        <input type="text" id="compose-bcc" class="form-input" placeholder="archive@example.com">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Subject:</label>
+                        <input type="text" id="compose-subject" class="form-input" placeholder="Subject...">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Message Body:</label>
+                        <textarea id="compose-body" class="form-textarea" rows="10" placeholder="Type your email here..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="compose-status" class="status-inline"></span>
+                <button type="button" id="compose-cancel-btn" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="compose-send-btn" class="btn btn-primary">🚀 Send Email</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 2: ADD / EDIT ACCOUNT -->
+    <div id="modal-account" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3 id="modal-account-title">➕ Add Email Connection</h3>
+                <button type="button" class="modal-close" id="modal-account-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="preset-selector">
+                    <span class="preset-label">Quick Presets:</span>
+                    <button type="button" class="preset-btn active" data-preset="gmail">Gmail</button>
+                    <button type="button" class="preset-btn" data-preset="yahoo">Yahoo</button>
+                    <button type="button" class="preset-btn" data-preset="fastmail">Fastmail</button>
+                    <button type="button" class="preset-btn" data-preset="outlook">Classic Outlook</button>
+                    <button type="button" class="preset-btn" data-preset="custom">Custom IMAP/SMTP</button>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>Connection Name:</label>
+                        <input type="text" id="acc-name" class="form-input" placeholder="e.g. Work Mailbox">
+                    </div>
+                    <div class="form-col">
+                        <label>Account Type:</label>
+                        <select id="acc-type" class="form-select">
+                            <option value="imap_smtp">IMAP / SMTP</option>
+                            <option value="outlook_mapi">Classic Outlook (MAPI)</option>
+                            <option value="exchange_owa">Exchange / OWA</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Email Address / Username:</label>
+                        <input type="text" id="acc-email" class="form-input" placeholder="user@gmail.com">
+                    </div>
+                </div>
+
+                <div id="acc-imap-fields">
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label>IMAP Host:</label>
+                            <input type="text" id="acc-imap-host" class="form-input" value="imap.gmail.com">
+                        </div>
+                        <div class="form-col form-col-sm">
+                            <label>IMAP Port:</label>
+                            <input type="number" id="acc-imap-port" class="form-input" value="993">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-col">
+                            <label>SMTP Host (for sending):</label>
+                            <input type="text" id="acc-smtp-host" class="form-input" value="smtp.gmail.com">
+                        </div>
+                        <div class="form-col form-col-sm">
+                            <label>SMTP Port:</label>
+                            <input type="number" id="acc-smtp-port" class="form-input" value="587">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-col full-width">
+                            <label>Password / App Password:</label>
+                            <input type="password" id="acc-pass" class="form-input" placeholder="Password or App Password">
+                            <span id="acc-help-text" class="form-hint">For Google, use a 16-character App Password.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>Historical Range:</label>
+                        <select id="acc-range" class="form-select">
+                            <option value="30d">Last 30 Days</option>
+                            <option value="90d">Last 90 Days</option>
+                            <option value="1yr" selected>Last 1 Year (Default)</option>
+                            <option value="all">All Time (Full Archive)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="account-test-status" class="status-inline"></span>
+                <button type="button" id="acc-test-btn" class="btn btn-secondary">🔍 Test Login</button>
+                <button type="button" id="acc-save-btn" class="btn btn-primary">Save Account</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: NEW CALENDAR EVENT -->
+    <div id="modal-event" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3>📅 Create Calendar Event</h3>
+                <button type="button" class="modal-close" id="modal-event-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Event Subject / Title:</label>
+                        <input type="text" id="event-subject" class="form-input" placeholder="Meeting with Client">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>Start Time:</label>
+                        <input type="datetime-local" id="event-start" class="form-input">
+                    </div>
+                    <div class="form-col">
+                        <label>End Time:</label>
+                        <input type="datetime-local" id="event-end" class="form-input">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Location (optional):</label>
+                        <input type="text" id="event-location" class="form-input" placeholder="Conference Room or Zoom Link">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Description / Notes:</label>
+                        <textarea id="event-body" class="form-textarea" rows="4" placeholder="Agenda and notes..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="event-status" class="status-inline"></span>
+                <button type="button" id="event-cancel-btn" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="event-save-btn" class="btn btn-primary">💾 Save Event</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 4: CALENDAR EVENT DETAIL & AMBIENT CONTEXT -->
+    <div id="modal-cal-detail" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-lg">
+            <div class="modal-header">
+                <h3 id="cal-detail-title">📅 Event Details &amp; Related Context</h3>
+                <button type="button" class="modal-close" id="modal-cal-detail-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="cal-detail-card">
+                    <h2 id="cal-detail-subject" class="cal-detail-subject">Meeting</h2>
+                    <div class="cal-detail-meta" id="cal-detail-meta">
+                        <span id="cal-detail-time" class="cal-meta-item">🕒 Nov 7, 2026</span>
+                        <span id="cal-detail-loc" class="cal-meta-item">📍 Room 101</span>
+                    </div>
+                    <div id="cal-detail-body" class="cal-detail-desc">No description.</div>
+                </div>
+
+                <div class="related-context-section" style="margin-top:20px;">
+                    <div class="section-subtitle">
+                        <span>✨ Ambient Related Documents &amp; Emails</span>
+                        <span id="cal-related-count-badge" class="shelf-count-badge">Searching...</span>
+                    </div>
+                    <div id="cal-related-container" class="related-cards-grid">
+                        <div class="loading-placeholder">Searching ambient archive...</div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="cal-detail-close-btn" class="btn btn-secondary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 5: TWO-STAGE RELEVANCE & SCORING EXPLANATION (TIER 1 + TIER 2 AURAROUTER) -->
+    <div id="modal-explain" class="modal-overlay modal-explain-overlay" style="display:none;">
+        <div class="modal-box modal-lg modal-explain-box">
+            <div class="modal-header">
+                <div>
+                    <h3 id="explain-modal-title">✨ Why This Matched</h3>
+                    <div id="explain-modal-subtitle" class="explain-modal-subtitle">Deterministic retrieval signals &amp; lazy AuraRouter reasoning</div>
+                </div>
+                <button type="button" class="modal-close" id="modal-explain-close">&times;</button>
+            </div>
+            <div class="modal-body explain-modal-body">
+                <!-- Item Banner -->
+                <div id="explain-item-banner" class="explain-item-banner"></div>
+
+                <!-- TIER 1: DETERMINISTIC EVIDENCE (INSTANT) -->
+                <div id="explain-tier1-card" class="explain-tier-card">
+                    <div class="explain-tier-header">
+                        <div class="explain-tier-title">📊 Tier 1: Deterministic Match &amp; Scoring Evidence</div>
+                        <span id="explain-tier1-badge" class="badge badge-success">Instant Local Analysis</span>
+                    </div>
+                    <div id="explain-tier1-content" class="explain-tier1-content">
+                        <div class="loading-placeholder">Computing scoring breakdown...</div>
+                    </div>
+                </div>
+
+                <!-- TIER 2: AURAROUTER AI REASONING (LAZY WITH GRACEFUL DEGRADATION) -->
+                <div id="explain-tier2-card" class="explain-tier-card explain-tier2-card">
+                    <div class="explain-tier-header">
+                        <div class="explain-tier-title">🧠 Tier 2: AuraRouter AI Reasoning</div>
+                        <span id="explain-tier2-meta" class="badge badge-info">Initializing...</span>
+                    </div>
+                    <div id="explain-tier2-body" class="explain-tier2-body">
+                        <div class="explain-progress-wrap">
+                            <div class="explain-progress-track">
+                                <div class="explain-progress-fill"></div>
+                            </div>
+                            <div class="explain-progress-status">Requesting grounded explanation from AuraRouter...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer explain-modal-footer">
+                <button type="button" id="explain-retry-btn" class="btn btn-secondary" style="display:none;">🔄 Retry AuraRouter</button>
+                <button type="button" id="explain-close-btn" class="btn btn-primary">Close</button>
+            </div>
         </div>
     </div>
 </body>
 </html>
-

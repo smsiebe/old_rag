@@ -24,6 +24,7 @@
         "doc_id": { "type": "string" },
         "content": { "type": "string" },
         "source_type": { "type": "string", "enum": ["EMAIL", "FILE"] },
+        "subject": { "type": ["string", "null"] },
         "sender": { "type": ["string", "null"] },
         "folder": { "type": ["string", "null"] },
         "received_ts_utc": { "type": ["string", "null"] },
@@ -33,7 +34,10 @@
         "vector_rank": { "type": ["integer", "null"] },
         "rrf_score": { "type": "number" },
         "normalized_rrf": { "type": "number" },
-        "relevance_tier": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] }
+        "relevance_tier": { "type": "string", "enum": ["HIGH", "MEDIUM", "LOW"] },
+        "cosine_similarity": { "type": ["number", "null"] },
+        "confidence_score": { "type": ["number", "null"] },
+        "exact_identifier_match": { "type": "boolean" }
       }
     },
     "StatusResponse": {
@@ -63,7 +67,171 @@
         "temp_view_path": { "type": ["string", "null"] },
         "error": { "type": ["string", "null"] }
       }
+    },
+    "AdminOverviewResponse": {
+      "type": "object",
+      "required": ["connections", "storage", "privacy", "items_indexed", "chunks_indexed", "is_sovereign"],
+      "properties": {
+        "connections": { "type": "array" },
+        "storage": { "type": "object" },
+        "privacy": { "type": "object" },
+        "items_indexed": { "type": "integer" },
+        "chunks_indexed": { "type": "integer" },
+        "daemon_running": { "type": "boolean" },
+        "is_sovereign": { "type": "boolean" }
+      }
+    },
+    "StatisticsResponse": {
+      "type": "object",
+      "required": ["total_queries", "resolved_by_hybrid", "resolved_by_vector", "resolved_by_lexical", "storage_saved_bytes", "total_documents", "total_chunks"],
+      "properties": {
+        "total_queries": { "type": "integer" },
+        "resolved_by_hybrid": { "type": "integer" },
+        "resolved_by_vector": { "type": "integer" },
+        "resolved_by_lexical": { "type": "integer" },
+        "storage_saved_bytes": { "type": "integer" },
+        "total_documents": { "type": "integer" },
+        "total_chunks": { "type": "integer" },
+        "recent_queries": { "type": "array" },
+        "is_sovereign": { "type": "boolean" }
+      }
+    },
+    "EmailAccountItem": {
+      "type": "object",
+      "required": ["id", "name", "account_type", "enabled"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "account_type": { "type": "string" },
+        "email_address": { "type": "string" },
+        "imap_host": { "type": "string" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "SendEmailRequest": {
+      "type": "object",
+      "required": ["to", "subject"],
+      "properties": {
+        "account_id": { "type": "string" },
+        "to": { "type": "array", "items": { "type": "string" } },
+        "cc": { "type": "array", "items": { "type": "string" } },
+        "bcc": { "type": "array", "items": { "type": "string" } },
+        "subject": { "type": "string" },
+        "body_text": { "type": "string" },
+        "body_html": { "type": "string" }
+      }
+    },
+    "CalendarEventItem": {
+      "type": "object",
+      "required": ["event_id", "subject", "start_ts_utc", "end_ts_utc"],
+      "properties": {
+        "event_id": { "type": "string" },
+        "subject": { "type": "string" },
+        "location": { "type": ["string", "null"] },
+        "start_ts_utc": { "type": "string" },
+        "end_ts_utc": { "type": "string" },
+        "is_all_day": { "type": "boolean" },
+        "organizer": { "type": ["string", "null"] },
+        "body_text": { "type": "string" }
+      }
+    },
+    "GetRelatedContextRequest": {
+      "type": "object",
+      "properties": {
+        "doc_id": { "type": ["string", "null"] },
+        "subject": { "type": "string" },
+        "text": { "type": "string" },
+        "top_k": { "type": "integer", "default": 6 }
+      }
+    },
+    "GetRelatedContextResponse": {
+      "type": "object",
+      "required": ["success", "related_files", "related_emails", "related_calendar"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "related_files": { "type": "array" },
+        "related_emails": { "type": "array" },
+        "related_calendar": { "type": "array" },
+        "query_used": { "type": "string" },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "OpenDocumentRequest": {
+      "type": "object",
+      "properties": {
+        "doc_id": { "type": ["string", "null"] },
+        "original_path": { "type": ["string", "null"] }
+      }
+    },
+    "OpenDocumentResponse": {
+      "type": "object",
+      "required": ["success"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "path": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "ExplainMatchTier1Request": {
+      "type": "object",
+      "properties": {
+        "item_kind": { "type": "string", "enum": ["search_hit", "calendar_event"], "default": "search_hit" },
+        "query_text": { "type": "string" },
+        "doc_id": { "type": ["string", "null"] },
+        "chunk_id": { "type": ["string", "null"] },
+        "event_id": { "type": ["string", "null"] },
+        "source_context": { "type": ["object", "null"] },
+        "score_snapshot": { "type": ["object", "null"] }
+      }
+    },
+    "ExplainMatchTier1Response": {
+      "type": "object",
+      "required": ["success", "item_kind", "channels_matched", "scoring", "passage", "summary_bullets"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "item_kind": { "type": "string" },
+        "source_context": { "type": "object" },
+        "document": { "type": "object" },
+        "query_analysis": { "type": "object" },
+        "channels_matched": { "type": "array", "items": { "type": "string" } },
+        "scoring": { "type": "object" },
+        "lexical_evidence": { "type": "object" },
+        "passage": { "type": "object" },
+        "summary_bullets": { "type": "array", "items": { "type": "string" } },
+        "error": { "type": ["string", "null"] }
+      }
+    },
+    "ExplainMatchTier2Request": {
+      "type": "object",
+      "properties": {
+        "item_kind": { "type": "string", "enum": ["search_hit", "calendar_event"], "default": "search_hit" },
+        "query_text": { "type": "string" },
+        "doc_id": { "type": ["string", "null"] },
+        "chunk_id": { "type": ["string", "null"] },
+        "event_id": { "type": ["string", "null"] },
+        "source_context": { "type": ["object", "null"] },
+        "score_snapshot": { "type": ["object", "null"] },
+        "tier1": { "type": ["object", "null"] },
+        "passage_text": { "type": ["string", "null"] },
+        "force_refresh": { "type": "boolean", "default": false }
+      }
+    },
+    "ExplainMatchTier2Response": {
+      "type": "object",
+      "required": ["success"],
+      "properties": {
+        "success": { "type": "boolean" },
+        "explanation": { "type": ["string", "null"] },
+        "model_id": { "type": ["string", "null"] },
+        "role": { "type": ["string", "null"] },
+        "provider": { "type": ["string", "null"] },
+        "latency_ms": { "type": ["integer", "null"] },
+        "cached": { "type": "boolean" },
+        "local_only": { "type": "boolean" },
+        "transport": { "type": ["string", "null"] },
+        "error_code": { "type": ["string", "null"] },
+        "error": { "type": ["string", "null"] }
+      }
     }
   }
 }
-

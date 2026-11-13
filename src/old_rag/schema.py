@@ -78,6 +78,37 @@ CREATE TABLE IF NOT EXISTS outbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_outbox_status ON outbox(status);
+
+-- Local Sovereign Search Metrics (Local Telemetry Only)
+CREATE TABLE IF NOT EXISTS search_metrics (
+    query_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_text TEXT NOT NULL,
+    resolved_by TEXT NOT NULL,
+    hit_count INTEGER NOT NULL,
+    top_confidence REAL,
+    executed_at_utc TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_search_metrics_time ON search_metrics(executed_at_utc);
+
+-- Sovereign Calendar Events Store
+CREATE TABLE IF NOT EXISTS calendar_events (
+    event_id TEXT PRIMARY KEY,
+    account_id TEXT,
+    source_type TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    location TEXT,
+    start_ts_utc TEXT NOT NULL,
+    end_ts_utc TEXT NOT NULL,
+    is_all_day INTEGER DEFAULT 0,
+    organizer TEXT,
+    attendees_json TEXT,
+    body_text TEXT,
+    status TEXT DEFAULT 'CONFIRMED',
+    created_at_utc TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_cal_start ON calendar_events(start_ts_utc);
 """
 
 # DDL for %LOCALAPPDATA%\\OldRAG\\lexical_fts.db
@@ -97,7 +128,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts_porter USING fts5(
     folder UNINDEXED,
     source_type UNINDEXED,
     received_ts_utc UNINDEXED,
-    tokenize='unicode61 remove_diacritics 2'
+    tokenize='porter unicode61 remove_diacritics 2'
 );
 
 -- Exact Substring & Serial Number FTS5 Table (trigram tokenizer)

@@ -143,6 +143,12 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         print(f"\nIngestion error: {e}")
 
 
+def cmd_mcp(args: argparse.Namespace) -> None:
+    """Run FastMCP server on stdio."""
+    from old_rag.mcp_server import main as run_mcp
+    run_mcp()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="old-rag", description="Sovereign local Outlook & file RAG engine")
     subparsers = parser.add_subparsers(dest="command")
@@ -161,6 +167,8 @@ def main() -> None:
 
     exp_parser = subparsers.add_parser("export-key", help="Export encrypted DEK backup")
     exp_parser.add_argument("--output", "-o", help="Target output file path")
+
+    mcp_parser = subparsers.add_parser("mcp", help="Run FastMCP server on stdio for AuraRouter / AI integration")
 
     args = parser.parse_args()
     if args.command == "init":
@@ -181,6 +189,8 @@ def main() -> None:
         cmd_ingest(args)
     elif args.command == "export-key":
         cmd_export_key(args)
+    elif args.command == "mcp":
+        cmd_mcp(args)
     else:
         parser.print_help()
 

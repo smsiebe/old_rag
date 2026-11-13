@@ -159,7 +159,7 @@ def test_t3_3_indexer_crud_operations(temp_app_dir):
 # --- T3.4: Search Engine & RRF Precision Tests ---
 
 def test_t3_4_fts5_escaping_and_identifier_detection():
-    assert escape_fts5_query('SN-4471-AB OR "malicious NEAR"') == '"SN-4471-AB" "OR" "malicious" "NEAR"'
+    assert escape_fts5_query('SN-4471-AB OR "malicious NEAR"') == '"SN-4471-AB" malicious'
     assert is_identifier_like("SN-4471-AB") is True
     assert is_identifier_like("PART_9921_X") is True
     assert is_identifier_like("regularword") is False

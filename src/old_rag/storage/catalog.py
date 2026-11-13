@@ -54,6 +54,19 @@ class CatalogRepository(CatalogProtocol):
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_documents_by_ids(self, doc_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Batch fetch document metadata by doc_ids."""
+        if not doc_ids:
+            return {}
+        conn = self._get_connection()
+        with self._lock:
+            placeholders = ",".join(["?"] * len(doc_ids))
+            cur = conn.execute(
+                f"SELECT doc_id, source_type, original_path, entry_id, internet_message_id, conversation_id, sender, subject, folder, received_ts_utc FROM documents WHERE doc_id IN ({placeholders})",
+                doc_ids,
+            )
+            return {r["doc_id"]: dict(r) for r in cur.fetchall()}
+
     def upsert_document(
         self,
         doc_id: str,
@@ -233,4 +246,72 @@ class CatalogRepository(CatalogProtocol):
                 conn.execute(f"DELETE FROM blobs WHERE blob_hash IN ({placeholders})", orphans)
                 conn.commit()
             return orphans
+
+    def record_query_metric(
+        self,
+        query_text: str,
+        resolved_by: str,
+        hit_count: int,
+        top_confidence: float,
+    ) -> None:
+        now_str = datetime.now(timezone.utc).isoformat()
+        conn = self._get_connection()
+        with self._lock:
+            conn.execute(
+                """
+                INSERT INTO search_metrics (query_text, resolved_by, hit_count, top_confidence, executed_at_utc)
+                VALUES (?, ?, ?, ?, ?);
+                """,
+                (query_text, resolved_by, hit_count, float(top_confidence), now_str),
+            )
+            conn.commit()
+
+    def get_statistics(self) -> Dict[str, Any]:
+        conn = self._get_connection()
+        with self._lock:
+            cur = conn.execute("SELECT COUNT(*) FROM search_metrics")
+            total_queries = cur.fetchone()[0]
+
+            cur = conn.execute("SELECT COUNT(*) FROM search_metrics WHERE resolved_by = 'hybrid'")
+            resolved_by_hybrid = cur.fetchone()[0]
+
+            cur = conn.execute("SELECT COUNT(*) FROM search_metrics WHERE resolved_by = 'vector'")
+            resolved_by_vector = cur.fetchone()[0]
+
+            cur = conn.execute("SELECT COUNT(*) FROM search_metrics WHERE resolved_by = 'lexical'")
+            resolved_by_lexical = cur.fetchone()[0]
+
+            cur = conn.execute("SELECT COALESCE(SUM(size_bytes * (ref_count - 1)), 0) FROM blobs WHERE ref_count > 1")
+            storage_saved_bytes = int(cur.fetchone()[0])
+
+            cur = conn.execute("SELECT COUNT(*) FROM documents WHERE is_deleted = 0")
+            total_documents = cur.fetchone()[0]
+
+            cur = conn.execute("SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM blobs")
+            row = cur.fetchone()
+            total_blobs = row[0]
+            total_blob_bytes = int(row[1])
+
+            cur = conn.execute(
+                """
+                SELECT query_text, resolved_by, hit_count, top_confidence, executed_at_utc
+                FROM search_metrics
+                ORDER BY query_id DESC
+                LIMIT 10
+                """
+            )
+            recent = [dict(r) for r in cur.fetchall()]
+
+            return {
+                "total_queries": total_queries,
+                "resolved_by_hybrid": resolved_by_hybrid,
+                "resolved_by_vector": resolved_by_vector,
+                "resolved_by_lexical": resolved_by_lexical,
+                "storage_saved_bytes": storage_saved_bytes,
+                "total_documents": total_documents,
+                "total_blobs": total_blobs,
+                "total_blob_bytes": total_blob_bytes,
+                "recent_queries": recent,
+                "is_sovereign": True,
+            }
 

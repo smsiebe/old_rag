@@ -100,6 +100,34 @@ class ClassicMAPIConnector:
         if sys.platform != "win32":
             raise ServiceUnavailableError("MAPI COM is only supported on Windows.")
 
+    def list_folders(self) -> List[str]:
+        """List folders available in Classic Outlook stores."""
+        if sys.platform != "win32":
+            return ["Inbox", "Sent Items"]
+        try:
+            self.check_availability()
+            import pythoncom
+            import win32com.client
+            pythoncom.CoInitialize()
+            try:
+                try:
+                    outlook = win32com.client.GetActiveObject("Outlook.Application")
+                except Exception:
+                    outlook = win32com.client.Dispatch("Outlook.Application")
+                ns = outlook.GetNamespace("MAPI")
+                result = []
+                for store in ns.Folders:
+                    store_name = getattr(store, "Name", "")
+                    for folder in getattr(store, "Folders", []):
+                        fname = getattr(folder, "Name", "")
+                        if fname:
+                            result.append(f"{store_name} / {fname}" if store_name else fname)
+                return result if result else ["Inbox", "Sent Items"]
+            finally:
+                pythoncom.CoUninitialize()
+        except Exception:
+            return ["Inbox", "Sent Items"]
+
     def format_dasl_query(self, as_of_date_utc: Optional[datetime], is_sent_folder: bool = False) -> Optional[str]:
         """Generate locale-independent DASL query string with UTC timestamp."""
         if not as_of_date_utc:
@@ -255,6 +283,172 @@ class ClassicMAPIConnector:
                     count += 1
                     if count % batch_size == 0:
                         pythoncom.PumpWaitingMessages()
+        finally:
+            pythoncom.CoUninitialize()
+
+    def poll_calendar(
+        self,
+        as_of_date_utc: Optional[datetime] = None,
+    ) -> Generator[CalendarEvent, None, None]:
+        """Poll appointments and meetings from Classic Outlook Calendar."""
+        self.check_availability()
+        import pythoncom
+        import win32com.client
+        from old_rag.contracts import CalendarEvent
+
+        pythoncom.CoInitialize()
+        try:
+            try:
+                outlook = win32com.client.GetActiveObject("Outlook.Application")
+            except Exception:
+                outlook = win32com.client.Dispatch("Outlook.Application")
+
+            ns = outlook.GetNamespace("MAPI")
+            # olFolderCalendar = 9
+            cal_folder = ns.GetDefaultFolder(9)
+            items = cal_folder.Items
+            items.Sort("[Start]", False)
+            items.IncludeRecurrences = True
+
+            if as_of_date_utc:
+                dt_str = as_of_date_utc.strftime("%m/%d/%Y %I:%M %p")
+                items = items.Restrict(f"[Start] >= '{dt_str}'")
+
+            for item in items:
+                # Class 26 = olAppointment
+                if getattr(item, "Class", None) != 26:
+                    continue
+
+                entry_id = str(getattr(item, "EntryID", ""))
+                subject = str(getattr(item, "Subject", "Untitled Event"))
+                location = str(getattr(item, "Location", "") or "")
+                body = str(getattr(item, "Body", "") or "")
+                organizer = str(getattr(item, "Organizer", "") or "")
+                all_day = bool(getattr(item, "AllDayEvent", False))
+
+                raw_start = getattr(item, "Start", None)
+                raw_end = getattr(item, "End", None)
+
+                start_dt = datetime.now(timezone.utc)
+                end_dt = start_dt
+                if raw_start:
+                    try:
+                        start_dt = raw_start.astimezone(timezone.utc) if hasattr(raw_start, "astimezone") else datetime.fromisoformat(str(raw_start)).astimezone(timezone.utc)
+                    except Exception:
+                        pass
+                if raw_end:
+                    try:
+                        end_dt = raw_end.astimezone(timezone.utc) if hasattr(raw_end, "astimezone") else datetime.fromisoformat(str(raw_end)).astimezone(timezone.utc)
+                    except Exception:
+                        pass
+
+                attendees = []
+                req_att = getattr(item, "RequiredAttendees", "")
+                if req_att:
+                    attendees.extend([a.strip() for a in req_att.split(";") if a.strip()])
+
+                yield CalendarEvent(
+                    event_id=entry_id or f"cal_{subject}_{start_dt.isoformat()}",
+                    account_id="default_outlook",
+                    source_type=SourceType.EMAIL,
+                    subject=subject,
+                    location=location,
+                    start_ts_utc=start_dt,
+                    end_ts_utc=end_dt,
+                    is_all_day=all_day,
+                    organizer=organizer,
+                    attendees=attendees,
+                    body_text=body,
+                )
+        finally:
+            pythoncom.CoUninitialize()
+
+    def create_calendar_event(
+        self,
+        subject: str,
+        start_dt: datetime,
+        end_dt: datetime,
+        location: str = "",
+        body: str = "",
+        all_day: bool = False,
+    ) -> Dict[str, Any]:
+        """Create a new appointment in Classic Outlook Calendar."""
+        self.check_availability()
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            try:
+                outlook = win32com.client.GetActiveObject("Outlook.Application")
+            except Exception:
+                outlook = win32com.client.Dispatch("Outlook.Application")
+
+            # olAppointmentItem = 1
+            appt = outlook.CreateItem(1)
+            appt.Subject = subject
+            appt.Location = location
+            appt.Body = body
+            appt.AllDayEvent = all_day
+            appt.Start = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+            appt.End = end_dt.strftime("%Y-%m-%d %H:%M:%S")
+            appt.Save()
+
+            return {
+                "success": True,
+                "event_id": str(getattr(appt, "EntryID", "")),
+                "subject": subject,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            pythoncom.CoUninitialize()
+
+    def send_mail_mapi(
+        self,
+        to: List[str],
+        cc: Optional[List[str]] = None,
+        bcc: Optional[List[str]] = None,
+        subject: str = "",
+        body_html: str = "",
+        body_text: str = "",
+        attachments: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Dispatch an email directly through Classic Outlook MAPI."""
+        self.check_availability()
+        import pythoncom
+        import win32com.client
+
+        pythoncom.CoInitialize()
+        try:
+            try:
+                outlook = win32com.client.GetActiveObject("Outlook.Application")
+            except Exception:
+                outlook = win32com.client.Dispatch("Outlook.Application")
+
+            # olMailItem = 0
+            mail = outlook.CreateItem(0)
+            mail.To = "; ".join(to)
+            if cc:
+                mail.CC = "; ".join(cc)
+            if bcc:
+                mail.BCC = "; ".join(bcc)
+            mail.Subject = subject
+            if body_html:
+                mail.HTMLBody = body_html
+            elif body_text:
+                mail.Body = body_text
+
+            if attachments:
+                import os
+                for att_path in attachments:
+                    if os.path.exists(att_path):
+                        mail.Attachments.Add(str(att_path))
+
+            mail.Send()
+            return {"success": True}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
         finally:
             pythoncom.CoUninitialize()
 

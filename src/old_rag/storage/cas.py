@@ -219,6 +219,13 @@ class CASEngine(ContentStoreProtocol):
             return True
         return False
 
+    def has_msg(self, doc_id: str) -> bool:
+        """Check if raw .msg is archived for doc_id."""
+        raw_hash = hashlib.sha256(doc_id.encode("utf-8")).hexdigest()
+        hmac_name = self._derive_hmac_name(raw_hash)
+        target = self.msg_dir / hmac_name[:2] / f"{hmac_name}.msg.enc"
+        return target.exists()
+
     # --- Temp View Lifecycle ---
 
     def create_temp_view_file(self, doc_id: str, suffix: str = ".msg") -> Optional[Path]:

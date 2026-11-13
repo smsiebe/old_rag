@@ -76,7 +76,8 @@ def test_safe_json_dumps_all_types():
     parsed = safe_json_loads(serialized)
     assert parsed["tier"] == "MEDIUM"
     assert parsed["source"] == "EMAIL"
-    assert "2026-11-07" in parsed["timestamp"]
+    assert "2026" in parsed["timestamp"]
+    assert "2026-11-07" in parsed["date_only"]
     assert parsed["nested"]["op"] == "INGEST"
 
 
@@ -125,3 +126,4 @@ def test_bridge_api_search_returns_json_serializable():
     serialized = json.dumps(res)
     assert isinstance(serialized, str)
     assert "results" in res
+

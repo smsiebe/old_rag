@@ -243,6 +243,7 @@ class SearchResult(SovereignBaseModel):
     doc_id: str
     content: str
     source_type: SourceType
+    subject: Optional[str] = None
     sender: Optional[str] = None
     folder: Optional[str] = None
     received_ts_utc: Optional[datetime] = None
@@ -253,6 +254,9 @@ class SearchResult(SovereignBaseModel):
     rrf_score: float  # IEEE 754 float64 exact
     normalized_rrf: float  # Normalized against theoretical max
     relevance_tier: RelevanceTier
+    cosine_similarity: Optional[float] = None
+    confidence_score: Optional[float] = None
+    exact_identifier_match: bool = False
 
 
 # --- Outbox / Replication DTOs ---
@@ -267,4 +271,74 @@ class OutboxRecord(SovereignBaseModel):
     status: OutboxStatus
     created_at_utc: datetime
     error_message: Optional[str] = None
+
+
+# --- Multi-Account, Mail Client & Calendar DTOs ---
+
+class EmailAccountConfig(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    account_type: str = "imap_smtp"  # "outlook_mapi", "imap_smtp", "exchange_owa"
+    email_address: str = ""
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_ssl: bool = True
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_ssl: bool = False
+    smtp_starttls: bool = True
+    username: str = ""
+    password: str = ""
+    server_url: str = ""
+    folders: List[str] = Field(default_factory=lambda: ["ALL"])
+    date_range: str = "1yr"
+    enabled: bool = True
+    created_at_utc: Optional[datetime] = None
+
+
+class CalendarEvent(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    account_id: Optional[str] = None
+    source_type: SourceType = SourceType.EMAIL
+    subject: str = ""
+    location: Optional[str] = None
+    start_ts_utc: datetime
+    end_ts_utc: datetime
+    is_all_day: bool = False
+    organizer: Optional[str] = None
+    attendees: List[str] = Field(default_factory=list)
+    body_text: str = ""
+    status: str = "CONFIRMED"
+
+
+class OutgoingEmail(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    to: List[str]
+    cc: List[str] = Field(default_factory=list)
+    bcc: List[str] = Field(default_factory=list)
+    subject: str = ""
+    body_text: str = ""
+    body_html: str = ""
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class EmailMessageSummary(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    doc_id: str
+    account_id: Optional[str] = None
+    sender: Optional[str] = None
+    subject: Optional[str] = None
+    folder: Optional[str] = None
+    received_ts_utc: Optional[datetime] = None
+    snippet: str = ""
+    is_read: bool = True
+    is_starred: bool = False
+    has_attachments: bool = False
 

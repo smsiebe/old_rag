@@ -36,15 +36,19 @@ def matryoshka_reduce(vec: np.ndarray, target_dim: int) -> np.ndarray:
     return sliced.astype(np.float32)
 
 
-def generate_deterministic_embedding(text: str, dim: int = 768) -> List[float]:
-    """Fallback deterministic embedding generator using SHA-256 hashing."""
-    # Prepend mandatory Nomic task prefix
+def generate_embedding(text: str, dim: int = 768, resolver: Optional[Any] = None) -> List[float]:
+    """Generate live nomic-embed-text-v1.5 embedding with Matryoshka reduction."""
+    from old_rag.storage.models import ModelResolver
+    res = resolver or ModelResolver()
+    model = res.get_text_embedding_model()
     prefixed = f"search_document: {text}"
-    seed = int(hashlib.sha256(prefixed.encode("utf-8")).hexdigest()[:8], 16)
-    rng = np.random.default_rng(seed)
-    raw = rng.standard_normal(768).astype(np.float32)
-    reduced = matryoshka_reduce(raw, dim)
+    raw = list(model.embed([prefixed]))[0]
+    reduced = matryoshka_reduce(np.array(raw, dtype=np.float32), dim)
     return reduced.tolist()
+
+
+# Backwards compatibility alias satisfying Rule 10 (Zero Stubs: uses real ONNX weights)
+generate_deterministic_embedding = generate_embedding
 
 
 class IndexEngine(IndexerProtocol):
@@ -55,12 +59,14 @@ class IndexEngine(IndexerProtocol):
         fts_db_path: Path,
         lancedb_table: Optional[Any] = None,
         config: Optional[ModelConfig] = None,
+        resolver: Optional[Any] = None,
     ):
         self.fts_db_path = fts_db_path
         self.lancedb_table = lancedb_table
         self.config = config or ModelConfig()
+        self.resolver = resolver
         self.fts_db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fastembed = None
+        self._embedder = None
         self._init_fts()
 
     def _init_fts(self) -> None:
@@ -71,14 +77,26 @@ class IndexEngine(IndexerProtocol):
         finally:
             conn.close()
 
+    def _get_embedder(self):
+        if self._embedder is None:
+            from old_rag.storage.models import ModelResolver
+            res = self.resolver or ModelResolver(self.config)
+            self._embedder = res.get_text_embedding_model()
+        return self._embedder
+
     def embed_chunks(self, chunks: List[DocumentChunk]) -> List[List[float]]:
-        """Generate Matryoshka-reduced embeddings for a batch of chunks."""
-        embeddings = []
+        """Generate Matryoshka-reduced embeddings for a batch of chunks using FastEmbed."""
+        if not chunks:
+            return []
+        embedder = self._get_embedder()
+        prefixed_texts = [f"search_document: {c.content}" for c in chunks]
+        raw_embeddings = list(embedder.embed(prefixed_texts))
         target_dim = self.config.matryoshka_dim
-        for c in chunks:
-            emb = generate_deterministic_embedding(c.content, dim=target_dim)
-            embeddings.append(emb)
-        return embeddings
+        reduced_embeddings = []
+        for raw in raw_embeddings:
+            reduced = matryoshka_reduce(np.array(raw, dtype=np.float32), target_dim)
+            reduced_embeddings.append(reduced.tolist())
+        return reduced_embeddings
 
     def upsert_chunks(self, chunks: List[DocumentChunk], embeddings: Optional[List[List[float]]] = None) -> None:
         """Idempotently insert/update chunks in lexical FTS5 and LanceDB vector stores."""
@@ -120,14 +138,20 @@ class IndexEngine(IndexerProtocol):
             conn.close()
 
         # Update LanceDB if active
-        if self.lancedb_table and embeddings and len(chunks) == len(embeddings):
+        if self.lancedb_table is not None and embeddings and len(chunks) == len(embeddings):
             try:
+                for c in chunks:
+                    try:
+                        self.lancedb_table.delete(f"chunk_id = '{c.chunk_id}'")
+                    except Exception:
+                        pass
+
                 records = []
                 for c, emb in zip(chunks, embeddings):
                     records.append({
                         "chunk_id": c.chunk_id,
                         "doc_id": c.doc_id,
-                        "thread_id": c.thread_id,
+                        "thread_id": c.thread_id or "",
                         "vector": emb,
                         "received_ts_utc": c.received_ts_utc.isoformat() if c.received_ts_utc else "",
                         "sender": c.sender or "",
@@ -151,6 +175,13 @@ class IndexEngine(IndexerProtocol):
                     conn.execute("DELETE FROM chunks_fts_trigram WHERE rowid = ?", (rowid,))
         finally:
             conn.close()
+
+        if self.lancedb_table is not None:
+            for cid in chunk_ids:
+                try:
+                    self.lancedb_table.delete(f"chunk_id = '{cid}'")
+                except Exception:
+                    pass
 
     def update_folder(self, doc_id: str, new_folder: str) -> None:
         conn = sqlite3.connect(str(self.fts_db_path))
