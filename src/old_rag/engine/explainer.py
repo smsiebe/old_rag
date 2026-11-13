@@ -891,7 +891,8 @@ class MatchExplainer:
 
         try:
             if provider == "ollama":
-                default_ep = os.environ.get("OLLAMA_ENDPOINT_DEFAULT", "http://127.0.0.1:11434/api/generate")
+                ollama_port = os.environ.get("OLLAMA_PORT", "11434")
+                default_ep = os.environ.get("OLLAMA_ENDPOINT_DEFAULT", f"http://127.0.0.1:{ollama_port}/api/generate")
                 endpoint = str(model_cfg.get("endpoint") or default_ep)
                 base = endpoint.split("/api/")[0] if "/api/" in endpoint else endpoint.rstrip("/")
                 status = _http_get_status(f"{base}/api/tags")
@@ -900,7 +901,8 @@ class MatchExplainer:
                 return False, f"Ollama returned HTTP {status} at {base}/api/tags"
 
             if provider == "llamacpp-server":
-                default_ep = os.environ.get("LLAMACPP_ENDPOINT_DEFAULT", "http://127.0.0.1:8080")
+                llama_port = os.environ.get("LLAMACPP_PORT", "8080")
+                default_ep = os.environ.get("LLAMACPP_ENDPOINT_DEFAULT", f"http://127.0.0.1:{llama_port}")
                 endpoint = str(model_cfg.get("endpoint") or default_ep).rstrip("/")
                 status = _http_get_status(f"{endpoint}/health")
                 if status == 200:
@@ -914,7 +916,8 @@ class MatchExplainer:
                 return False, f"GGUF model file not found: {path or '(unset)'}"
 
             if provider == "openapi":
-                default_ep = os.environ.get("OPENAPI_ENDPOINT_DEFAULT", "http://127.0.0.1:8000/v1")
+                openapi_port = os.environ.get("OPENAPI_PORT", "8000")
+                default_ep = os.environ.get("OPENAPI_ENDPOINT_DEFAULT", f"http://127.0.0.1:{openapi_port}/v1")
                 endpoint = str(model_cfg.get("endpoint") or default_ep).rstrip("/")
                 status = _http_get_status(f"{endpoint}/models")
                 if status < 500:
