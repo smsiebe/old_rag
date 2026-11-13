@@ -180,6 +180,11 @@ class ExtractedAttachmentMeta(SovereignBaseModel):
     content_type: str
     blob_hash: str
     vlm_markdown: Optional[str] = None
+    template_key: str = "default"
+    structured_data: Dict[str, Any] = Field(default_factory=dict)
+    document_metadata: Dict[str, Any] = Field(default_factory=dict)
+    unstructured_annotations: List[str] = Field(default_factory=list)
+    route_telemetry: Dict[str, Any] = Field(default_factory=dict)
 
 
 class NormalizedDocumentJSON(SovereignBaseModel):
@@ -203,6 +208,9 @@ class NormalizedDocumentJSON(SovereignBaseModel):
     received_ts_utc: Optional[datetime] = None
     clean_body_text: str = ""
     attachments: List[ExtractedAttachmentMeta] = Field(default_factory=list)
+    structured_context: Dict[str, Any] = Field(default_factory=dict)
+    document_metadata: Dict[str, Any] = Field(default_factory=dict)
+    unstructured_annotations: List[str] = Field(default_factory=list)
     extracted_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

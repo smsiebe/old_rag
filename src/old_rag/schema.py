@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 # DDL for %LOCALAPPDATA%\\OldRAG\\catalog.db
 CATALOG_SCHEMA_DDL = """
@@ -52,12 +52,30 @@ CREATE TABLE IF NOT EXISTS blob_references (
     FOREIGN KEY(doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
 );
 
--- VLM Result Cache (keyed by attachment/image SHA-256)
+-- VLM Result Cache (composite key: attachment/image SHA-256 + template_key + schema_hash)
 CREATE TABLE IF NOT EXISTS vlm_cache (
-    blob_hash TEXT PRIMARY KEY,
+    blob_hash TEXT NOT NULL,
+    template_key TEXT NOT NULL DEFAULT 'default',
+    schema_hash TEXT NOT NULL DEFAULT '',
     markdown TEXT NOT NULL,
-    created_at_utc TEXT NOT NULL
+    structured_json TEXT,
+    metadata_json TEXT,
+    created_at_utc TEXT NOT NULL,
+    PRIMARY KEY (blob_hash, template_key, schema_hash)
 );
+
+-- Extracted Structured Entities per Document (searchable & queryable)
+CREATE TABLE IF NOT EXISTS document_entities (
+    doc_id TEXT NOT NULL,
+    entity_key TEXT NOT NULL,
+    entity_value TEXT NOT NULL,
+    source_filename TEXT NOT NULL DEFAULT '',
+    created_at_utc TEXT NOT NULL,
+    PRIMARY KEY (doc_id, entity_key, entity_value, source_filename),
+    FOREIGN KEY (doc_id) REFERENCES documents(doc_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_document_entities_key_val
+    ON document_entities(entity_key, entity_value);
 
 -- Skip list for repeated signatures, icons, and small banners
 CREATE TABLE IF NOT EXISTS vlm_skip_hashes (

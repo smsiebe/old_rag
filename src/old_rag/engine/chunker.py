@@ -83,6 +83,14 @@ class ParentAwareChunker(ChunkerProtocol):
 
     def chunk(self, doc: NormalizedDocumentJSON) -> List[DocumentChunk]:
         raw_text = self.strip_reply_chain(doc.clean_body_text, doc)
+        if doc.structured_context and "<!-- Scryer Structured Context -->" not in raw_text:
+            from old_rag.engine.extractor import format_structured_context_text
+
+            extra_ctx = format_structured_context_text(
+                doc.structured_context, doc.document_metadata or None, doc.unstructured_annotations or None
+            )
+            if extra_ctx:
+                raw_text = f"{raw_text}\n\n{extra_ctx}".strip()
         if not raw_text.strip():
             return []
 

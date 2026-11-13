@@ -26,7 +26,6 @@ from old_rag.engine.search import (
     escape_fts5_query,
     is_identifier_like,
 )
-from old_rag.engine.vlm_worker import VLMWorker
 
 
 # --- T3.1: DocumentExtractor Tests ---
@@ -224,20 +223,16 @@ def test_t3_4_rrf_k_parameter_sensitivity(temp_app_dir):
     assert r_60[0].rrf_score != r_20[0].rrf_score
 
 
-# --- T3.5: VLM Worker & Tiling Tests ---
+# --- T3.5: Scryer Visual Extraction Tests ---
 
-def test_t3_5_vlm_worker_tiling():
-    worker = VLMWorker()
+def test_t3_5_scryer_image_extraction():
+    extractor = DocumentExtractor()
     # Create test 400x400 image
     img = Image.new("RGB", (400, 400), color=(255, 255, 255))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     data = buf.getvalue()
 
-    md = worker.extract_image_markdown(data, "test.png")
-    assert isinstance(md, str)
-    assert len(md) > 0
-
-    # Negative: corrupted image bytes return empty or fallback string
-    bad_md = worker._extract_tiled(b"corrupt_image_bytes")
-    assert bad_md == ""
+    res = extractor.scryer.parser_registry.parse(data, "test.png")
+    assert res.metadata.dimensions == (400, 400)
+    assert len(res.visual_elements) == 1

@@ -89,12 +89,25 @@ class CatalogProtocol(Protocol):
         """Decrement reference count for blob. Returns new ref_count."""
         ...
 
-    def get_vlm_cache(self, blob_hash: str) -> Optional[str]:
-        """Retrieve cached VLM Markdown extraction by image/blob SHA-256."""
+    def get_vlm_cache(
+        self,
+        blob_hash: str,
+        template_key: str = "default",
+        schema_hash: str = "",
+    ) -> Optional[str]:
+        """Retrieve cached VLM Markdown/context by blob SHA-256, template key, and schema hash."""
         ...
 
-    def put_vlm_cache(self, blob_hash: str, markdown: str) -> None:
-        """Store VLM Markdown extraction in catalog cache."""
+    def put_vlm_cache(
+        self,
+        blob_hash: str,
+        markdown: str,
+        template_key: str = "default",
+        schema_hash: str = "",
+        structured_json: Optional[str] = None,
+        metadata_json: Optional[str] = None,
+    ) -> None:
+        """Store VLM Markdown and structured context in catalog cache."""
         ...
 
     def is_vlm_skipped(self, blob_hash: str) -> bool:

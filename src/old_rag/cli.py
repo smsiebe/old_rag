@@ -7,7 +7,6 @@ import sys
 from pathlib import Path
 
 from old_rag.contracts import StorageConfig
-from old_rag.engine.vlm_worker import run_vlm_worker_stdio_loop
 from old_rag.ingest.outlook import is_new_outlook_active, probe_object_model_guard
 from old_rag.pipeline.daemon import DaemonProcess
 from old_rag.pipeline.lifecycle import NamedPipeClient, get_scoped_pipe_name
@@ -57,11 +56,6 @@ def cmd_daemon(args: argparse.Namespace) -> None:
     """Run core background daemon process (Process 1)."""
     daemon = DaemonProcess()
     daemon.run()
-
-
-def cmd_vlm_worker(args: argparse.Namespace) -> None:
-    """Run VLM worker subprocess loop (Process 2)."""
-    run_vlm_worker_stdio_loop()
 
 
 def cmd_ui(args: argparse.Namespace) -> None:
@@ -155,7 +149,6 @@ def main() -> None:
 
     subparsers.add_parser("init", help="Initialize keys, storage, and verify MAPI")
     subparsers.add_parser("daemon", help="Run background coordinator daemon")
-    subparsers.add_parser("vlm-worker", help="Run VLM worker subprocess (internal)")
     subparsers.add_parser("ui", help="Launch native UI overlay")
     subparsers.add_parser("status", help="Query daemon status")
     subparsers.add_parser("reindex", help="Trigger offline re-indexing from text CAS")
@@ -175,8 +168,6 @@ def main() -> None:
         cmd_init(args)
     elif args.command == "daemon":
         cmd_daemon(args)
-    elif args.command == "vlm-worker":
-        cmd_vlm_worker(args)
     elif args.command == "ui":
         cmd_ui(args)
     elif args.command == "status":

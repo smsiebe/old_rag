@@ -38,6 +38,33 @@ class CatalogRepository(CatalogProtocol):
         conn = self._get_connection()
         with self._lock:
             conn.executescript(CATALOG_SCHEMA_DDL)
+            cols = {row["name"] for row in conn.execute("PRAGMA table_info(vlm_cache)").fetchall()}
+            if "template_key" not in cols:
+                conn.execute("ALTER TABLE vlm_cache RENAME TO _vlm_cache_v1")
+                conn.execute(
+                    """
+                    CREATE TABLE vlm_cache (
+                        blob_hash TEXT NOT NULL,
+                        template_key TEXT NOT NULL DEFAULT 'default',
+                        schema_hash TEXT NOT NULL DEFAULT '',
+                        markdown TEXT NOT NULL,
+                        structured_json TEXT,
+                        metadata_json TEXT,
+                        created_at_utc TEXT NOT NULL,
+                        PRIMARY KEY (blob_hash, template_key, schema_hash)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    INSERT INTO vlm_cache (
+                        blob_hash, template_key, schema_hash, markdown, created_at_utc
+                    )
+                    SELECT blob_hash, 'default', '', markdown, created_at_utc
+                    FROM _vlm_cache_v1
+                    """
+                )
+                conn.execute("DROP TABLE _vlm_cache_v1")
             cursor = conn.execute("SELECT version FROM schema_version WHERE version = ?", (CURRENT_SCHEMA_VERSION,))
             if not cursor.fetchone():
                 now_str = datetime.now(timezone.utc).isoformat()
@@ -149,26 +176,114 @@ class CatalogRepository(CatalogProtocol):
             conn.commit()
             return row["ref_count"] if row else 0
 
-    def get_vlm_cache(self, blob_hash: str) -> Optional[str]:
+    def get_vlm_cache(
+        self,
+        blob_hash: str,
+        template_key: str = "default",
+        schema_hash: str = "",
+    ) -> Optional[str]:
         conn = self._get_connection()
         with self._lock:
-            cur = conn.execute("SELECT markdown FROM vlm_cache WHERE blob_hash = ?", (blob_hash,))
+            cur = conn.execute(
+                """
+                SELECT markdown FROM vlm_cache
+                WHERE blob_hash = ? AND template_key = ? AND schema_hash = ?
+                """,
+                (blob_hash, template_key, schema_hash),
+            )
             row = cur.fetchone()
             return row["markdown"] if row else None
 
-    def put_vlm_cache(self, blob_hash: str, markdown: str) -> None:
+    def get_vlm_cache_entry(
+        self,
+        blob_hash: str,
+        template_key: str = "default",
+        schema_hash: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        with self._lock:
+            cur = conn.execute(
+                """
+                SELECT markdown, structured_json, metadata_json
+                FROM vlm_cache
+                WHERE blob_hash = ? AND template_key = ? AND schema_hash = ?
+                """,
+                (blob_hash, template_key, schema_hash),
+            )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    def put_vlm_cache(
+        self,
+        blob_hash: str,
+        markdown: str,
+        template_key: str = "default",
+        schema_hash: str = "",
+        structured_json: Optional[str] = None,
+        metadata_json: Optional[str] = None,
+    ) -> None:
         now_str = datetime.now(timezone.utc).isoformat()
         conn = self._get_connection()
         with self._lock:
             conn.execute(
                 """
-                INSERT INTO vlm_cache (blob_hash, markdown, created_at_utc)
-                VALUES (?, ?, ?)
-                ON CONFLICT(blob_hash) DO UPDATE SET markdown = excluded.markdown;
+                INSERT INTO vlm_cache (
+                    blob_hash, template_key, schema_hash, markdown,
+                    structured_json, metadata_json, created_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(blob_hash, template_key, schema_hash) DO UPDATE SET
+                    markdown = excluded.markdown,
+                    structured_json = COALESCE(excluded.structured_json, vlm_cache.structured_json),
+                    metadata_json = COALESCE(excluded.metadata_json, vlm_cache.metadata_json);
                 """,
-                (blob_hash, markdown, now_str),
+                (
+                    blob_hash,
+                    template_key,
+                    schema_hash,
+                    markdown,
+                    structured_json,
+                    metadata_json,
+                    now_str,
+                ),
             )
             conn.commit()
+
+    def upsert_document_entities(
+        self,
+        doc_id: str,
+        entities: List[tuple],
+    ) -> None:
+        """Persist flattened structured entities [(entity_key, entity_value, source_filename)] for a doc."""
+        if not entities:
+            return
+        now_str = datetime.now(timezone.utc).isoformat()
+        conn = self._get_connection()
+        with self._lock:
+            conn.executemany(
+                """
+                INSERT OR REPLACE INTO document_entities (
+                    doc_id, entity_key, entity_value, source_filename, created_at_utc
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                [(doc_id, str(k), str(v), str(src or ""), now_str) for k, v, src in entities],
+            )
+            conn.commit()
+
+    def get_document_entities(self, doc_id: str) -> List[Dict[str, Any]]:
+        """Retrieve persisted structured entities for a document."""
+        conn = self._get_connection()
+        with self._lock:
+            cur = conn.execute(
+                """
+                SELECT entity_key, entity_value, source_filename, created_at_utc
+                FROM document_entities
+                WHERE doc_id = ?
+                ORDER BY entity_key, entity_value
+                """,
+                (doc_id,),
+            )
+            return [dict(r) for r in cur.fetchall()]
 
     def is_vlm_skipped(self, blob_hash: str) -> bool:
         conn = self._get_connection()

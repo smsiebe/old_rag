@@ -57,7 +57,7 @@ def test_t4_2_cli_argument_parsing():
     # Verify presence of all required command handlers
     assert hasattr(cli_mod, "cmd_init")
     assert hasattr(cli_mod, "cmd_daemon")
-    assert hasattr(cli_mod, "cmd_vlm_worker")
+    assert not hasattr(cli_mod, "cmd_vlm_worker")
     assert hasattr(cli_mod, "cmd_ui")
     assert hasattr(cli_mod, "cmd_status")
     assert hasattr(cli_mod, "cmd_reindex")
