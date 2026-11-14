@@ -11,7 +11,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
@@ -218,4 +218,65 @@ class DirectoryWatcher:
         self.handler.stop()
         self.observer.stop()
         self.observer.join(timeout=2.0)
+
+
+def ingest_filesystem_path(
+    target_path: Path,
+    coordinator: Any,
+    recursive: bool = True,
+) -> Dict[str, Any]:
+    """Synchronously ingest a local file or directory tree through PipelineCoordinator."""
+    target = Path(target_path).resolve()
+    if not target.exists():
+        raise FileNotFoundError(f"Path not found: {target}")
+
+    handler = CoalescingFileHandler(on_payload=coordinator.ingest_payload, debounce_seconds=60.0)
+    handler.stop()
+
+    if target.is_file():
+        candidates = [target]
+    else:
+        candidates = sorted(target.rglob("*") if recursive else target.glob("*"))
+
+    ingested = 0
+    skipped = 0
+    errors = 0
+    doc_ids: List[str] = []
+
+    extractor = getattr(coordinator, "extractor", None)
+    for p in candidates:
+        if not p.is_file():
+            continue
+        if target.is_dir():
+            try:
+                rel_parts = p.relative_to(target).parts
+                if any(part.startswith(".") for part in rel_parts):
+                    skipped += 1
+                    continue
+            except Exception:
+                pass
+        if is_temporary_office_file(p.name) or is_cloud_placeholder(p):
+            skipped += 1
+            continue
+        if extractor is not None and hasattr(extractor, "can_extract") and not extractor.can_extract(p.name):
+            skipped += 1
+            continue
+
+        try:
+            payload = handler._process_file(p)
+            if payload is not None:
+                coordinator.ingest_payload(payload)
+                ingested += 1
+                doc_ids.append(payload.doc_id)
+            else:
+                skipped += 1
+        except Exception:
+            errors += 1
+
+    return {
+        "ingested": ingested,
+        "skipped": skipped,
+        "errors": errors,
+        "doc_ids": doc_ids,
+    }
 

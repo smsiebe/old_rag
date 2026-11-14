@@ -82,7 +82,7 @@ class BridgeAPI:
             cat = CatalogRepository(app_dir / "catalog.db")
             doc_count = 0
             try:
-                row = cat._conn.execute("SELECT COUNT(*) FROM documents").fetchone()
+                row = cat._get_connection().execute("SELECT COUNT(*) FROM documents").fetchone()
                 if row:
                     doc_count = row[0]
             except Exception:
@@ -123,7 +123,7 @@ class BridgeAPI:
         if "error" in res:
             from old_rag.engine.chunker import ParentAwareChunker
             from old_rag.engine.extractor import DocumentExtractor
-            from old_rag.engine.indexer import IndexEngine
+            from old_rag.engine.indexer import IndexEngine, open_lancedb_table
             from old_rag.pipeline.coordinator import PipelineCoordinator
             from old_rag.storage.cas import CASEngine, get_default_app_data_dir
             from old_rag.storage.catalog import CatalogRepository
@@ -135,7 +135,7 @@ class BridgeAPI:
                 catalog=cat,
                 extractor=DocumentExtractor(catalog=cat),
                 chunker=ParentAwareChunker(catalog=cat),
-                indexer=IndexEngine(app_dir / "lexical_fts.db"),
+                indexer=IndexEngine(app_dir / "lexical_fts.db", lancedb_table=open_lancedb_table(app_dir)),
             )
             count = coord.reindex_all()
             return {"success": True, "count": count}

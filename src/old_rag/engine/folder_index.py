@@ -194,6 +194,12 @@ class HeadOfFolderIndex:
         indexed_count = 0
         skipped_count = 0
 
+        from scryer.contracts import ScryerExtractionOptions
+        from scryer.extractor import ScryerExtractor
+
+        scryer = ScryerExtractor()
+        phase1_opts = ScryerExtractionOptions(enable_phase2=False, extract_images=False)
+
         with self.lock(timeout_sec=10.0):
             conn = self._get_connection()
             try:
@@ -204,7 +210,7 @@ class HeadOfFolderIndex:
                     # Ignore .oldrag and hidden/system directories
                     if self.INDEX_DIR_NAME in p.parts:
                         continue
-                    if not p.is_file():
+                    if not p.is_file() or p.name.startswith("~$"):
                         continue
 
                     rel_path = str(p.relative_to(self.folder_root))
@@ -223,13 +229,20 @@ class HeadOfFolderIndex:
                             skipped_count += 1
                             continue
 
-                        # Extract text content if plain text or utf-8 parseable
+                        # Extract clean text via Scryer Phase 1 for document formats, fallback to UTF-8 text
                         content = ""
+                        sha256 = ""
                         try:
-                            # Read first 1MB of text
-                            raw = p.read_bytes()[:1024 * 1024]
-                            content = raw.decode("utf-8", errors="ignore")
-                            sha256 = hashlib.sha256(raw).hexdigest()
+                            if scryer.parser_registry.can_parse(p.name):
+                                scryer_res = scryer.extract(p, options=phase1_opts)
+                                content = (scryer_res.raw_text or "").strip()
+                                if not content and scryer_res.metadata.title:
+                                    content = scryer_res.metadata.title
+                                sha256 = scryer_res.sha256
+                            else:
+                                raw = p.read_bytes()[:1024 * 1024]
+                                content = raw.decode("utf-8", errors="ignore")
+                                sha256 = hashlib.sha256(raw).hexdigest()
                         except Exception:
                             sha256 = ""
 
@@ -274,6 +287,12 @@ class HeadOfFolderIndex:
         if not self.db_path.exists():
             return []
 
+        from old_rag.engine.search import escape_fts5_query
+
+        match_query = escape_fts5_query(query_text)
+        if not match_query or match_query == '""':
+            return []
+
         conn = self._get_connection()
         try:
             cur = conn.execute(
@@ -284,7 +303,7 @@ class HeadOfFolderIndex:
                 WHERE folder_fts MATCH ?
                 LIMIT ?
                 """,
-                (query_text, top_k),
+                (match_query, top_k),
             )
             rows = [dict(r) for r in cur.fetchall()]
             for r in rows:

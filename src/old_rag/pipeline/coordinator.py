@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import List, Optional
 
 from old_rag.contracts import (
+    NormalizedDocumentJSON,
     OutboxOp,
     RawIngestPayload,
 )
+from old_rag.engine.extractor import _flatten_structured_fields
 from old_rag.protocols import (
     CatalogProtocol,
     ChunkerProtocol,
@@ -35,6 +37,38 @@ class PipelineCoordinator(CoordinatorProtocol):
         self.chunker = chunker
         self.indexer = indexer
 
+    def _sync_document_entities(self, norm_doc: NormalizedDocumentJSON) -> None:
+        """Persist flattened Scryer structured entities into CatalogSchema v2 document_entities."""
+        if not hasattr(self.catalog, "upsert_document_entities"):
+            return
+
+        entity_rows: List[tuple] = []
+        covered_sources: set[str] = set()
+
+        for att in norm_doc.attachments:
+            if att.structured_data:
+                covered_sources.add(att.filename)
+                for k, v in _flatten_structured_fields(att.structured_data):
+                    if k not in ("extracted_text", "text_content") and not k.startswith("_"):
+                        entity_rows.append((k, v, att.filename))
+
+        if norm_doc.structured_context:
+            att_names = {a.filename for a in norm_doc.attachments}
+            for top_k, top_v in norm_doc.structured_context.items():
+                if top_k in covered_sources:
+                    continue
+                if isinstance(top_v, dict) and top_k in att_names:
+                    for k, v in _flatten_structured_fields(top_v):
+                        if k not in ("extracted_text", "text_content") and not k.startswith("_"):
+                            entity_rows.append((k, v, top_k))
+                else:
+                    for k, v in _flatten_structured_fields(top_v, prefix=str(top_k)):
+                        if k not in ("extracted_text", "text_content") and not k.startswith("_"):
+                            entity_rows.append((k, v, ""))
+
+        if entity_rows:
+            self.catalog.upsert_document_entities(norm_doc.doc_id, entity_rows)
+
     def ingest_payload(self, payload: RawIngestPayload) -> None:
         """Execute full ingestion pipeline with two-phase outbox commit."""
         # 1. Deterministic extraction & conditional VLM
@@ -61,6 +95,7 @@ class PipelineCoordinator(CoordinatorProtocol):
             text_cas_ref=text_cas_ref,
             raw_msg_cas_ref=raw_msg_cas_ref,
         )
+        self._sync_document_entities(norm_doc)
 
         # Record blob references in catalog and persist to CAS Tier 2
         for att in norm_doc.attachments:
@@ -95,6 +130,7 @@ class PipelineCoordinator(CoordinatorProtocol):
             if record.op == OutboxOp.INGEST:
                 norm_doc = self.cas.get_text(record.doc_id)
                 if norm_doc:
+                    self._sync_document_entities(norm_doc)
                     chunks = self.chunker.chunk(norm_doc)
                     self.indexer.upsert_chunks(chunks)
                     self.catalog.mark_outbox_committed(record.outbox_id)
@@ -120,6 +156,7 @@ class PipelineCoordinator(CoordinatorProtocol):
         for did in doc_ids:
             norm_doc = self.cas.get_text(did)
             if norm_doc:
+                self._sync_document_entities(norm_doc)
                 chunks = self.chunker.chunk(norm_doc)
                 self.indexer.upsert_chunks(chunks)
                 count += 1

@@ -51,6 +51,21 @@ def generate_embedding(text: str, dim: int = 768, resolver: Optional[Any] = None
 generate_deterministic_embedding = generate_embedding
 
 
+def open_lancedb_table(app_data_dir: Path, dim: int = 768) -> Optional[Any]:
+    """Open or create the shared 'chunks_vec' LanceDB table under app_data_dir / 'lancedb'."""
+    try:
+        import lancedb
+        from old_rag.schema import get_lancedb_pyarrow_schema
+
+        lancedb_dir = Path(app_data_dir) / "lancedb"
+        lancedb_dir.mkdir(parents=True, exist_ok=True)
+        db = lancedb.connect(str(lancedb_dir))
+        schema = get_lancedb_pyarrow_schema(dim=dim)
+        return db.create_table("chunks_vec", schema=schema, exist_ok=True)
+    except Exception:
+        return None
+
+
 class IndexEngine(IndexerProtocol):
     """Atomic multi-index mutator for SQLite FTS5 (porter & trigram) and LanceDB."""
 

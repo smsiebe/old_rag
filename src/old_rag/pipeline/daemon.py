@@ -12,11 +12,11 @@ from typing import Optional
 from old_rag.contracts import ModelConfig, StorageConfig, safe_json_dumps, safe_json_loads
 from old_rag.engine.chunker import ParentAwareChunker
 from old_rag.engine.explainer import MatchExplainer
-from old_rag.engine.extractor import DocumentExtractor
-from old_rag.engine.indexer import IndexEngine
+from old_rag.engine.extractor import DocumentExtractor, build_scryer_options_from_settings
+from old_rag.engine.indexer import IndexEngine, open_lancedb_table
 from old_rag.engine.search import HybridSearchEngine
 from old_rag.ingest.outlook import ClassicMAPIConnector, is_new_outlook_active
-from old_rag.ingest.watcher import DirectoryWatcher
+from old_rag.ingest.watcher import DirectoryWatcher, ingest_filesystem_path
 from old_rag.pipeline.coordinator import PipelineCoordinator
 from old_rag.pipeline.lifecycle import (
     NamedPipeServer,
@@ -41,17 +41,10 @@ class DaemonProcess:
         self.catalog = CatalogRepository(self.app_data_dir / "catalog.db")
 
         # Initialize LanceDB table if possible
-        self.lancedb_table = None
-        try:
-            import lancedb
-            from old_rag.schema import get_lancedb_pyarrow_schema
-            lancedb_dir = self.app_data_dir / "lancedb"
-            lancedb_dir.mkdir(parents=True, exist_ok=True)
-            db = lancedb.connect(str(lancedb_dir))
-            schema = get_lancedb_pyarrow_schema(dim=self.model_cfg.matryoshka_dim)
-            self.lancedb_table = db.create_table("chunks_vec", schema=schema, exist_ok=True)
-        except Exception:
-            self.lancedb_table = None
+        self.lancedb_table = open_lancedb_table(
+            self.app_data_dir,
+            dim=self.model_cfg.matryoshka_dim,
+        )
 
         self.indexer = IndexEngine(
             fts_db_path=self.app_data_dir / "lexical_fts.db",
@@ -275,6 +268,7 @@ class DaemonProcess:
                 new_settings = req.get("settings", {})
                 validation = validate_storage_location(new_settings.get("storage_location", ""))
                 save_settings(new_settings)
+                self.extractor.default_options = build_scryer_options_from_settings(new_settings)
                 return safe_json_dumps({"success": True, "privacy": validation})
             elif action == "test_imap_connection":
                 from old_rag.ingest.imap import IMAPConnector
@@ -430,6 +424,15 @@ class DaemonProcess:
                 except Exception:
                     pass
                 return safe_json_dumps({"success": True, "event": evt.model_dump(mode="json")})
+            elif action == "ingest_path":
+                path_str = req.get("path", "")
+                recursive = bool(req.get("recursive", True))
+                stats = ingest_filesystem_path(
+                    Path(path_str),
+                    self.coordinator,
+                    recursive=recursive,
+                )
+                return safe_json_dumps({"success": True, **stats})
             elif action == "scan_head_of_folder":
                 from old_rag.engine.folder_index import HeadOfFolderIndex
                 folder_path = req.get("folder_path", "")
@@ -502,7 +505,22 @@ class DaemonProcess:
         if recovered > 0:
             print(f"Recovered {recovered} uncommitted outbox items on startup.")
 
-        # 3. Start Named Pipe IPC Server
+        # 3. Start Filesystem Watcher if configured
+        try:
+            from old_rag.storage.settings import load_settings
+            settings = load_settings()
+            fs_cfg = settings.get("connectors", {}).get("filesystem", {})
+            watch_paths = [Path(p) for p in fs_cfg.get("paths", []) if p and Path(p).exists()]
+            if fs_cfg.get("enabled", True) and watch_paths:
+                self.watcher = DirectoryWatcher(
+                    watch_paths,
+                    on_payload=self.coordinator.ingest_payload,
+                )
+                self.watcher.start()
+        except Exception:
+            pass
+
+        # 4. Start Named Pipe IPC Server
         self.pipe_server.start()
         print(f"OldRAG Daemon running. IPC Pipe: {get_scoped_pipe_name()}")
 
@@ -514,6 +532,11 @@ class DaemonProcess:
 
     def stop(self) -> None:
         self._running = False
+        if self.watcher is not None:
+            try:
+                self.watcher.stop()
+            except Exception:
+                pass
         self.pipe_server.stop()
         self.cas.sweep_tmp()
         self.mutex.release()

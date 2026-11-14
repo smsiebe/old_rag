@@ -19,6 +19,7 @@ from old_rag.protocols import CatalogProtocol, ExtractorProtocol, VLMClientProto
 from scryer.contracts import (
     ScryerExtractionOptions,
     ScryerResult,
+    TriMode,
     compute_canonical_hash,
 )
 from scryer.extractor import ScryerExtractor
@@ -81,6 +82,49 @@ def format_structured_context_text(
     return "\n".join(lines).strip()
 
 
+def build_scryer_options_from_settings(
+    settings: Optional[Dict[str, Any]] = None,
+) -> ScryerExtractionOptions:
+    """Translate OldRAG settings['aurarouter'] into ScryerExtractionOptions."""
+    if settings is None:
+        try:
+            from old_rag.storage.settings import load_settings
+            settings = load_settings()
+        except Exception:
+            settings = {}
+
+    ar = (settings or {}).get("aurarouter", {}) or {}
+    enabled = bool(ar.get("enabled", True))
+    local_only = bool(ar.get("local_only", False))
+    config_path = ar.get("config_path") or None
+    timeout_sec = float(ar.get("timeout_sec") or 60.0)
+    vision_role = ar.get("vision_role") or (
+        ar.get("role") if ar.get("role") not in (None, "", "assist") else None
+    )
+    endpoint_url = ar.get("endpoint_url") or None
+    mode = str(ar.get("mode", "auto")).lower().strip()
+
+    if mode in ("mcp_http", "ipc"):
+        tri_mode = TriMode.IPC
+        mcp_url = endpoint_url
+    elif mode == "mas":
+        tri_mode = TriMode.MAS
+        mcp_url = None
+    else:
+        tri_mode = TriMode.PYTHON
+        mcp_url = endpoint_url
+
+    return ScryerExtractionOptions(
+        enable_phase2=enabled,
+        tri_mode=tri_mode,
+        prefer_local=local_only,
+        aurarouter_config_path=str(config_path) if config_path else None,
+        mcp_url=mcp_url,
+        route_override=vision_role,
+        timeout_seconds=timeout_sec,
+    )
+
+
 class DocumentExtractor(ExtractorProtocol):
     """Document parser leveraging Scryer with composite template-keyed VLM caching."""
 
@@ -95,7 +139,11 @@ class DocumentExtractor(ExtractorProtocol):
         self.catalog = catalog
         self.vlm_client = vlm_client
         self.scryer = scryer_extractor or ScryerExtractor()
-        self.default_options = default_options or ScryerExtractionOptions()
+        self.default_options = (
+            default_options
+            if default_options is not None
+            else build_scryer_options_from_settings()
+        )
         self.templates_by_ext = {k.lower(): v for k, v in (templates_by_ext or {}).items()}
 
     def _resolve_options_and_identity(
@@ -117,6 +165,7 @@ class DocumentExtractor(ExtractorProtocol):
                 getattr(template_obj, "name", None)
                 or (template_obj.get("name") if isinstance(template_obj, dict) else None)
                 or getattr(template_obj, "__name__", None)
+                or (str(template_obj) if isinstance(template_obj, (str, Path)) else None)
                 or "custom"
             )
             schema_hash = compute_canonical_hash(schema_dict)
