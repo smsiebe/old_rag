@@ -1,0 +1,44 @@
+{
+  "$schema": "https://auragrid.io/schemas/app.manifest.schema.json",
+  "appId": "old-rag",
+  "name": "Old-RAG - Sovereign Local Outlook & Filesystem Hybrid RAG",
+  "version": "0.1.0",
+  "description": "Zero-admin sovereign local Outlook and filesystem hybrid RAG engine with PyWebView desktop UI and MCP server",
+  "websiteUrl": "https://auracoredynamics.com/aurasprout/catalog/",
+  "services": [
+    {
+      "masId": "old-rag-service",
+      "displayName": "Old-RAG Engine",
+      "mode": "LocalOnly",
+      "runtime": "Python",
+      "pythonConfig": {
+        "pythonExecutable": "python",
+        "arguments": "-m old_rag.cli run"
+      }
+    }
+  ],
+  "guiEntryPoints": [
+    {
+      "name": "desktop-ui",
+      "context": "Python",
+      "entryCommand": "-m old_rag.cli run --ui",
+      "description": "Launch Old-RAG sovereign desktop workbench"
+    }
+  ],
+  "distribution": {
+    "channels": [
+      "stable"
+    ],
+    "entrypointCommand": "-m old_rag.cli run --ui",
+    "createDesktopShortcut": true,
+    "createLaunchers": true,
+    "tags": [
+      "old-rag",
+      "rag",
+      "search",
+      "outlook",
+      "mcp"
+    ]
+  }
+}
+
