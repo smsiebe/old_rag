@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -86,6 +87,33 @@ class KeyManager:
         }
         return json.dumps(payload, indent=2).encode("utf-8")
 
+    def encrypt_secret(self, plaintext: str) -> str:
+        """Encrypt credential or token using master key AES-256-GCM. Idempotent on already-encrypted tokens."""
+        if not plaintext or plaintext.startswith("ENC_DPAPI_AESGCM:"):
+            return plaintext
+        master = self.get_master_key()
+        aesgcm = AESGCM(master)
+        nonce = os.urandom(12)
+        ciphertext = aesgcm.encrypt(nonce, plaintext.encode("utf-8"), b"OldRAG Secret")
+        return f"ENC_DPAPI_AESGCM:{nonce.hex()}:{ciphertext.hex()}"
+
+    def decrypt_secret(self, token: str) -> str:
+        """Decrypt credential or token. Passes through unencrypted strings idempotently."""
+        if not token or not token.startswith("ENC_DPAPI_AESGCM:"):
+            return token
+        parts = token.split(":")
+        if len(parts) != 3:
+            return token
+        try:
+            nonce = bytes.fromhex(parts[1])
+            ciphertext = bytes.fromhex(parts[2])
+            master = self.get_master_key()
+            aesgcm = AESGCM(master)
+            decrypted = aesgcm.decrypt(nonce, ciphertext, b"OldRAG Secret")
+            return decrypted.decode("utf-8")
+        except Exception:
+            return token
+
 
 class CASEngine(ContentStoreProtocol):
     """3-Tier Content-Addressable Storage Engine using AES-256-GCM envelope encryption."""
@@ -115,7 +143,7 @@ class CASEngine(ContentStoreProtocol):
         return hmac.new(self._hmac_key, raw_sha256.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def _encrypt_and_write_atomic(self, target_path: Path, plaintext: bytes, aad: bytes) -> None:
-        """Encrypt payload with AES-256-GCM and atomic os.replace."""
+        """Encrypt payload with AES-256-GCM and atomic os.replace with bounded retry."""
         target_path.parent.mkdir(parents=True, exist_ok=True)
         nonce = os.urandom(12)
         ciphertext = self._aesgcm.encrypt(nonce, plaintext, aad)
@@ -127,7 +155,15 @@ class CASEngine(ContentStoreProtocol):
             f.flush()
             os.fsync(f.fileno())
 
-        os.replace(temp_path, target_path)
+        attempts = 6
+        for attempt in range(attempts):
+            try:
+                os.replace(temp_path, target_path)
+                break
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.005 * (2 ** attempt))
 
     def _read_and_decrypt(self, target_path: Path, aad: bytes) -> Optional[bytes]:
         """Read and decrypt payload with AES-256-GCM."""
@@ -250,4 +286,25 @@ class CASEngine(ContentStoreProtocol):
                     except Exception:
                         pass
         return count
+
+    def get_document_storage_bytes(self, doc_id: str) -> int:
+        """Return the sum of on-disk encrypted bytes for doc_id across Tier 1 (text) and Tier 3 (msg)."""
+        raw_hash = hashlib.sha256(doc_id.encode("utf-8")).hexdigest()
+        hmac_name = self._derive_hmac_name(raw_hash)
+        total = 0
+        text_target = self.text_dir / hmac_name[:2] / f"{hmac_name}.json.enc"
+        if text_target.exists():
+            total += text_target.stat().st_size
+        msg_target = self.msg_dir / hmac_name[:2] / f"{hmac_name}.msg.enc"
+        if msg_target.exists():
+            total += msg_target.stat().st_size
+        return total
+
+    def get_blob_storage_bytes(self, blob_hash: str) -> int:
+        """Return on-disk encrypted bytes for Tier 2 blob."""
+        hmac_name = self._derive_hmac_name(blob_hash)
+        blob_target = self.blob_dir / hmac_name[:2] / f"{hmac_name}.bin.enc"
+        if blob_target.exists():
+            return blob_target.stat().st_size
+        return 0
 

@@ -5,28 +5,81 @@
 (function (root) {
     "use strict";
 
-    var isReady = false;
+    var isReady = Boolean(root.pywebview && root.pywebview.api);
     var readyCallbacks = [];
 
-    window.addEventListener("pywebviewready", function () {
+    function markReady() {
+        if (isReady) return;
         isReady = true;
         for (var i = 0; i < readyCallbacks.length; i++) {
-            readyCallbacks[i]();
+            try {
+                readyCallbacks[i]();
+            } catch (e) {
+                console.error("Bridge ready callback error:", e);
+            }
         }
         readyCallbacks = [];
-    });
+    }
+
+    if (root.pywebview && root.pywebview.api) {
+        markReady();
+    } else {
+        window.addEventListener("pywebviewready", markReady);
+        var pollCount = 0;
+        var pollTimer = setInterval(function () {
+            pollCount++;
+            if (root.pywebview && root.pywebview.api) {
+                clearInterval(pollTimer);
+                markReady();
+            } else if (pollCount > 100) {
+                clearInterval(pollTimer);
+            }
+        }, 25);
+    }
+
+    function unwrapResponse(res) {
+        if (res && res.data && typeof res.data === "object" && !Array.isArray(res.data)) {
+            var merged = Object.assign({}, res.data, res);
+            if (merged.ok !== undefined && merged.success === undefined) {
+                merged.success = Boolean(merged.ok);
+            }
+            return merged;
+        }
+        if (res && res.ok !== undefined && res.success === undefined) {
+            res.success = Boolean(res.ok);
+        }
+        return res;
+    }
 
     function callApi(method, payload) {
         return new Promise(function (resolve, reject) {
             function execute() {
-                if (!window.pywebview || !window.pywebview.api || typeof window.pywebview.api[method] !== "function") {
-                    reject(new Error("Bridge method not available: " + method));
+                if (root.OldRAGApi && typeof root.OldRAGApi.invokeBridge === "function") {
+                    root.OldRAGApi.invokeBridge(method, payload).then(function (res) {
+                        resolve(unwrapResponse(res));
+                    }).catch(reject);
                     return;
                 }
-                window.pywebview.api[method](payload).then(resolve).catch(reject);
+                if (!root.pywebview || !root.pywebview.api) {
+                    reject(new Error("Bridge not available: " + method));
+                    return;
+                }
+                if (typeof root.pywebview.api.dispatch === "function") {
+                    root.pywebview.api.dispatch(method, payload || {}).then(function (res) {
+                        resolve(unwrapResponse(res));
+                    }).catch(reject);
+                    return;
+                }
+                if (typeof root.pywebview.api[method] === "function") {
+                    root.pywebview.api[method](payload || {}).then(function (res) {
+                        resolve(unwrapResponse(res));
+                    }).catch(reject);
+                    return;
+                }
+                reject(new Error("Bridge method not available: " + method));
             }
 
-            if (isReady) {
+            if (isReady || (root.pywebview && root.pywebview.api)) {
                 execute();
             } else {
                 readyCallbacks.push(execute);
@@ -35,6 +88,7 @@
     }
 
     var SovereignBridge = {
+        callApi: callApi,
         search: function (request) {
             return callApi("search", request);
         },
@@ -123,6 +177,5 @@
         }
     };
 
-    root.SovereignBridge = SovereignBridge;
+    root.SovereignBridge = Object.assign(root.SovereignBridge || {}, SovereignBridge);
 })(window);
-

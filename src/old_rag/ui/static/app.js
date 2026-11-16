@@ -64,6 +64,8 @@ document.addEventListener("DOMContentLoaded", function () {
         else if (targetTab === "tab-accounts") loadAccountsAndFolders();
         else if (targetTab === "tab-storage") loadStorage();
         else if (targetTab === "tab-metrics") loadMetrics();
+        else if (targetTab === "tab-chat" && window.OldRAGChatView) window.OldRAGChatView.loadRooms();
+        else if (targetTab === "tab-sync-quota" && window.OldRAGSyncQuotaView) window.OldRAGSyncQuotaView.loadData();
     }
 
     navTabs.forEach(function (tab) {
@@ -184,7 +186,22 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     var mailSearchClearBtn = document.getElementById("mail-search-clear-btn");
-    mailRefreshBtn.addEventListener("click", fetchMessages);
+    mailRefreshBtn.addEventListener("click", function () {
+        mailRefreshBtn.classList.add("rotating");
+        var bridgeObj = window.OldRAGApi || window.SovereignBridge;
+        if (bridgeObj && typeof bridgeObj.triggerSync === "function") {
+            bridgeObj.triggerSync({ source_type: "EMAIL" }).then(function () {
+                setTimeout(fetchMessages, 800);
+            }).catch(function () {
+                fetchMessages();
+            }).finally(function () {
+                setTimeout(function () { mailRefreshBtn.classList.remove("rotating"); }, 1500);
+            });
+        } else {
+            fetchMessages();
+            setTimeout(function () { mailRefreshBtn.classList.remove("rotating"); }, 500);
+        }
+    });
     mailSearchFilter.addEventListener("input", debounce(fetchMessages, 300));
     if (mailSearchClearBtn) {
         mailSearchClearBtn.addEventListener("click", function () {
@@ -582,7 +599,9 @@ document.addEventListener("DOMContentLoaded", function () {
             html += "<div class='cal-cell " + isToday + "'>";
             html += "<span class='cal-day-num'>" + day + "</span>";
             dayEvents.forEach(function (e) {
-                html += "<div class='cal-event-pill' data-id='" + escapeHtml(e.event_id) + "' style='cursor:pointer;' title='" + escapeHtml(e.subject + " (" + (e.location || "No location") + ")") + "'>" + escapeHtml(e.subject) + "</div>";
+                var color = e.calendar_color || "#339af0";
+                var sys = e.source_system || "Outlook";
+                html += "<div class='cal-event-pill' data-id='" + escapeHtml(e.event_id) + "' style='cursor:pointer; background:" + color + "33; border-left:3px solid " + color + "; color:#fff;' title='" + escapeHtml(e.subject + " (" + (e.location || "No location") + ") - " + sys) + "'>" + escapeHtml(e.subject) + "</div>";
             });
             html += "</div>";
         }
@@ -600,15 +619,17 @@ document.addEventListener("DOMContentLoaded", function () {
         // Render Agenda List
         var agendaHtml = "";
         if (calendarEvents.length === 0) {
-            agendaHtml = "<div class='empty-state'><div class='empty-icon'>📅</div><h3>No calendar events</h3><p>Click 'New Event' or connect Outlook Calendar to see meetings.</p></div>";
+            agendaHtml = "<div class='empty-state'><div class='empty-icon'>📅</div><h3>No calendar events</h3><p>Click 'New Event' or connect Outlook, Google, or Exchange Calendars to see meetings.</p></div>";
         } else {
             calendarEvents.forEach(function (e) {
+                var color = e.calendar_color || "#339af0";
+                var sys = e.source_system || "Outlook";
                 var startD = new Date(e.start_ts_utc);
                 var dateStr = isNaN(startD.getTime()) ? e.start_ts_utc : startD.toLocaleDateString() + " " + startD.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-                agendaHtml += "<div class='agenda-item' data-id='" + escapeHtml(e.event_id) + "' style='cursor:pointer;'>";
+                agendaHtml += "<div class='agenda-item' data-id='" + escapeHtml(e.event_id) + "' style='cursor:pointer; border-left:4px solid " + color + ";'>";
                 agendaHtml += "<div>";
-                agendaHtml += "<h4>" + escapeHtml(e.subject) + "</h4>";
+                agendaHtml += "<h4><span class='badge' style='background:" + color + "22; color:" + color + "; margin-right:6px; font-size:11px;'>" + escapeHtml(sys) + "</span>" + escapeHtml(e.subject) + "</h4>";
                 agendaHtml += "<p style='color:var(--text-muted);font-size:12px;'>🕒 " + escapeHtml(dateStr);
                 if (e.location) agendaHtml += " | 📍 " + escapeHtml(e.location);
                 agendaHtml += "</p>";
@@ -929,14 +950,38 @@ document.addEventListener("DOMContentLoaded", function () {
     var accSaveBtn = document.getElementById("acc-save-btn");
     var accountTestStatus = document.getElementById("account-test-status");
 
+    var chatAccountsList = [];
+    var calendarAccountsList = [];
+    var chatAccountsCardsContainer = document.getElementById("chat-accounts-cards-container");
+    var calendarAccountsCardsContainer = document.getElementById("calendar-accounts-cards-container");
+
+    var activePurgeTarget = { id: "", name: "", sourceType: "EMAIL" };
+    var activeDeleteTarget = { id: "", name: "", connectorType: "email", purge: false };
+
     function loadAccountsAndFolders() {
-        // Load Accounts
+        // 1. Load Email Accounts
         window.SovereignBridge.listAccounts().then(function (res) {
             accountsList = res.accounts || [];
             renderAccountsList();
         });
 
-        // Load Monitored Folders & Head-of-Folder Cache Status
+        // 2. Load Chat Accounts
+        if (window.SovereignBridge.listChatAccounts) {
+            window.SovereignBridge.listChatAccounts().then(function (res) {
+                chatAccountsList = res.accounts || [];
+                renderChatAccountsList();
+            });
+        }
+
+        // 3. Load Calendar Accounts
+        if (window.SovereignBridge.listCalendarAccounts) {
+            window.SovereignBridge.listCalendarAccounts().then(function (res) {
+                calendarAccountsList = res.accounts || [];
+                renderCalendarAccountsList();
+            });
+        }
+
+        // 4. Load Monitored Folders & Head-of-Folder Cache Status
         window.SovereignBridge.getSettings().then(function (data) {
             currentSettings = data.settings || {};
             var fsPaths = (currentSettings.connectors && currentSettings.connectors.filesystem && currentSettings.connectors.filesystem.paths) || [];
@@ -945,8 +990,9 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     function renderAccountsList() {
+        if (!accountsCardsContainer) return;
         if (accountsList.length === 0) {
-            accountsCardsContainer.innerHTML = "<div class='empty-state'><div class='empty-icon'>✉️</div><h3>No Email Connections</h3><p>Click 'Add Email Connection' to connect Outlook, Gmail, or IMAP mailboxes.</p></div>";
+            accountsCardsContainer.innerHTML = "<div class='empty-state'><div class='empty-icon'>✉️</div><h3>No Email Connections</h3><p>Click 'Add Email' to connect Outlook, Gmail, or IMAP mailboxes.</p></div>";
             return;
         }
 
@@ -958,7 +1004,7 @@ document.addEventListener("DOMContentLoaded", function () {
             html += "<div class='acc-card'>";
             html += "<div class='acc-card-top'>";
             html += "<div>";
-            html += "<div class='acc-card-title'>" + escapeHtml(acc.name) + "</div>";
+            html += "<div class='acc-card-title'>📧 " + escapeHtml(acc.name) + "</div>";
             html += "<div class='acc-card-email'>" + escapeHtml(acc.email_address || acc.username || "Local MAPI Profile") + "</div>";
             html += "</div>";
             html += statusBadge;
@@ -969,14 +1015,417 @@ document.addEventListener("DOMContentLoaded", function () {
             html += "<span>Range: <strong>" + escapeHtml(acc.date_range || "1yr") + "</strong></span>";
             html += "</div>";
 
-            html += "<div class='acc-card-footer'>";
-            html += "<button class='btn btn-secondary btn-icon' onclick='testAccountLogin(\"" + escapeHtml(acc.id) + "\")'>Test</button>";
-            html += "<button class='btn btn-warning btn-icon' onclick='deleteAccountById(\"" + escapeHtml(acc.id) + "\")'>Delete</button>";
+            html += "<div class='card-actions-row'>";
+            html += "<button type='button' class='btn btn-sm btn-secondary' onclick='syncConnector(\"" + escapeHtml(acc.id) + "\", \"EMAIL\")' title='Trigger immediate synchronization'>🔄 Sync</button>";
+            html += "<button type='button' class='btn btn-sm btn-secondary' onclick='testAccountLogin(\"" + escapeHtml(acc.id) + "\")'>Test</button>";
+            html += "<button type='button' class='btn btn-sm btn-warning' onclick='openPurgeConfirmModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name) + "\", \"EMAIL\")' title='Purge indexed messages and vectors without deleting connection'>🧹 Purge Data</button>";
+            html += "<button type='button' class='btn btn-sm btn-danger' onclick='openDeleteConnectorModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name) + "\", \"email\")' title='Delete connection with optional data purge'>🗑️ Delete</button>";
             html += "</div>";
             html += "</div>";
         });
 
         accountsCardsContainer.innerHTML = html;
+    }
+
+    function renderChatAccountsList() {
+        if (!chatAccountsCardsContainer) return;
+        if (chatAccountsList.length === 0) {
+            chatAccountsCardsContainer.innerHTML = "<div class='empty-state'><div class='empty-icon'>💬</div><h3>No Chat Connections</h3><p>Click 'Add Chat' to connect Rocket.Chat, Google Chat, or Slack.</p></div>";
+            return;
+        }
+
+        var html = "";
+        chatAccountsList.forEach(function (acc) {
+            var adapter = acc.adapter_type || "chat";
+            var icon = adapter === "rocketchat" ? "🚀" : (adapter === "google_chat" ? "🌐" : (adapter === "teams" ? "👥" : "💬"));
+            var statusBadge = acc.enabled !== false ? "<span class='badge badge-success'>Active</span>" : "<span class='badge badge-warning'>Disabled</span>";
+
+            html += "<div class='acc-card'>";
+            html += "<div class='acc-card-top'>";
+            html += "<div>";
+            html += "<div class='acc-card-title'>" + icon + " " + escapeHtml(acc.name || acc.display_name || adapter) + "</div>";
+            html += "<div class='acc-card-email'>" + escapeHtml(acc.server_url || acc.username || "Configured Adapter") + "</div>";
+            html += "</div>";
+            html += statusBadge;
+            html += "</div>";
+
+            html += "<div style='font-size:12px;color:var(--text-muted);'>";
+            html += "<span>Adapter: <strong>" + escapeHtml(adapter.toUpperCase()) + "</strong></span> | ";
+            html += "<span>Lookback: <strong>" + (acc.lookback_days || 30) + " days</strong></span>";
+            html += "</div>";
+
+            html += "<div class='card-actions-row'>";
+            html += "<button type='button' class='btn btn-sm btn-secondary' onclick='syncConnector(\"" + escapeHtml(acc.id) + "\", \"CHAT\")' title='Trigger immediate synchronization'>🔄 Sync</button>";
+            html += "<button type='button' class='btn btn-sm btn-warning' onclick='openPurgeConfirmModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name || acc.display_name || adapter) + "\", \"CHAT\")' title='Purge indexed messages and vectors without deleting connection'>🧹 Purge Data</button>";
+            html += "<button type='button' class='btn btn-sm btn-danger' onclick='openDeleteConnectorModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name || acc.display_name || adapter) + "\", \"chat\")' title='Delete connection with optional data purge'>🗑️ Delete</button>";
+            html += "</div>";
+            html += "</div>";
+        });
+
+        chatAccountsCardsContainer.innerHTML = html;
+    }
+
+    function renderCalendarAccountsList() {
+        if (!calendarAccountsCardsContainer) return;
+        if (calendarAccountsList.length === 0) {
+            calendarAccountsCardsContainer.innerHTML = "<div class='empty-state'><div class='empty-icon'>📅</div><h3>No Calendar Connections</h3><p>Click 'Add Calendar' to connect Classic Outlook, Google Calendar, Exchange, or Confluence.</p></div>";
+            return;
+        }
+
+        var html = "";
+        calendarAccountsList.forEach(function (acc) {
+            var color = acc.color || "#2563eb";
+            var typeLabel = acc.connector_type === "outlook_mapi" ? "Classic Outlook (MAPI)" : (acc.connector_type === "google_calendar" ? "Google Calendar" : (acc.connector_type === "confluence" ? "Confluence Team Calendar" : (acc.connector_type === "exchange" ? "Microsoft Exchange" : "CalDAV / ICS")));
+            var statusBadge = acc.enabled !== false ? "<span class='badge badge-success'>Active</span>" : "<span class='badge badge-warning'>Disabled</span>";
+
+            html += "<div class='acc-card' style='border-left: 4px solid " + color + ";'>";
+            html += "<div class='acc-card-top'>";
+            html += "<div>";
+            html += "<div class='acc-card-title'><span class='color-indicator-swatch' style='background:" + color + ";'></span>" + escapeHtml(acc.name) + "</div>";
+            html += "<div class='acc-card-email'>" + escapeHtml(acc.url || (acc.connector_type === "outlook_mapi" ? "Local MAPI Store" : "Configured Feed")) + "</div>";
+            html += "</div>";
+            html += statusBadge;
+            html += "</div>";
+
+            html += "<div style='font-size:12px;color:var(--text-muted);'>";
+            html += "<span>Type: <strong>" + escapeHtml(typeLabel) + "</strong></span>";
+            html += "</div>";
+
+            html += "<div class='card-actions-row'>";
+            html += "<button type='button' class='btn btn-sm btn-secondary' onclick='syncConnector(\"" + escapeHtml(acc.id) + "\", \"CALENDAR\")' title='Trigger immediate synchronization'>🔄 Sync</button>";
+            html += "<button type='button' class='btn btn-sm btn-secondary' onclick='popoutCalendarAccount(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name) + "\")' title='Pop out this calendar into a dashboard window'>⧉ Pop Out</button>";
+            html += "<button type='button' class='btn btn-sm btn-warning' onclick='openPurgeConfirmModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name) + "\", \"CALENDAR\")' title='Purge indexed events and vectors without deleting connection'>🧹 Purge Data</button>";
+            html += "<button type='button' class='btn btn-sm btn-danger' onclick='openDeleteConnectorModal(\"" + escapeHtml(acc.id) + "\", \"" + escapeHtml(acc.name) + "\", \"calendar\")' title='Delete connection with optional data purge'>🗑️ Delete</button>";
+            html += "</div>";
+            html += "</div>";
+        });
+
+        calendarAccountsCardsContainer.innerHTML = html;
+    }
+
+    window.syncConnector = function (accId, sourceType) {
+        if (!window.SovereignBridge) return;
+        window.SovereignBridge.triggerSync({ account_id: accId, source_type: sourceType }).then(function () {
+            alert("✔ Synchronization triggered for " + sourceType.toLowerCase() + " connector " + accId);
+            if (sourceType === "EMAIL") loadMailbox();
+            if (sourceType === "CALENDAR") loadCalendarEvents();
+            if (sourceType === "CHAT" && global.OldRAGChatView) global.OldRAGChatView.loadRooms();
+        }).catch(function (err) {
+            alert("Sync error: " + err.message);
+        });
+    };
+
+    window.openPurgeConfirmModal = function (accId, name, sourceType) {
+        activePurgeTarget = { id: accId, name: name, sourceType: sourceType };
+        var nameEl = document.getElementById("purge-target-name");
+        if (nameEl) nameEl.textContent = name || accId;
+        var modal = document.getElementById("modal-purge-confirm");
+        if (modal) modal.style.display = "flex";
+    };
+
+    window.openDeleteConnectorModal = function (accId, name, connectorType) {
+        activeDeleteTarget = { id: accId, name: name, connectorType: connectorType, purge: false };
+        var nameEl = document.getElementById("delete-connector-name");
+        if (nameEl) nameEl.textContent = name || accId;
+
+        // Reset choice cards selection
+        var choiceOnly = document.getElementById("choice-delete-only");
+        var choicePurge = document.getElementById("choice-delete-purge");
+        if (choiceOnly && choicePurge) {
+            choiceOnly.classList.add("selected");
+            choicePurge.classList.remove("selected");
+        }
+
+        var modal = document.getElementById("modal-delete-connector");
+        if (modal) modal.style.display = "flex";
+    };
+
+    window.popoutCalendarAccount = function (accId, accName) {
+        if (global.OldRAGWindowManager) {
+            global.OldRAGWindowManager.openWindow({
+                id: "cal_" + accId,
+                type: "calendar",
+                target_id: accId,
+                title: "Calendar: " + (accName || "View"),
+                subBadge: accName,
+            });
+        }
+    };
+
+    // Purge Modal Listeners
+    var modalPurgeClose = document.getElementById("modal-purge-close");
+    var btnPurgeCancel = document.getElementById("btn-purge-cancel");
+    var btnPurgeConfirmAction = document.getElementById("btn-purge-confirm-action");
+
+    if (modalPurgeClose) modalPurgeClose.addEventListener("click", function () {
+        var m = document.getElementById("modal-purge-confirm");
+        if (m) m.style.display = "none";
+    });
+    if (btnPurgeCancel) btnPurgeCancel.addEventListener("click", function () {
+        var m = document.getElementById("modal-purge-confirm");
+        if (m) m.style.display = "none";
+    });
+    if (btnPurgeConfirmAction) {
+        btnPurgeConfirmAction.addEventListener("click", function () {
+            btnPurgeConfirmAction.disabled = true;
+            btnPurgeConfirmAction.textContent = "Purging...";
+            window.SovereignBridge.purgeAccountData({
+                account_id: activePurgeTarget.id,
+                source_type: activePurgeTarget.sourceType
+            }).then(function (res) {
+                btnPurgeConfirmAction.disabled = false;
+                btnPurgeConfirmAction.textContent = "🧹 Purge Data Now";
+                var m = document.getElementById("modal-purge-confirm");
+                if (m) m.style.display = "none";
+                alert("✔ Purged " + (res.deleted_docs_count || res.deleted_docs || 0) + " documents and indexed chunks for " + activePurgeTarget.name);
+                loadAccountsAndFolders();
+                loadMailbox();
+                loadCalendarEvents();
+            }).catch(function (err) {
+                btnPurgeConfirmAction.disabled = false;
+                btnPurgeConfirmAction.textContent = "🧹 Purge Data Now";
+                alert("Purge error: " + err.message);
+            });
+        });
+    }
+
+    // Delete Connector Modal Listeners
+    var modalDeleteClose = document.getElementById("modal-delete-close");
+    var btnDeleteCancel = document.getElementById("btn-delete-cancel");
+    var btnDeleteConfirmAction = document.getElementById("btn-delete-confirm-action");
+    var choiceDeleteOnly = document.getElementById("choice-delete-only");
+    var choiceDeletePurge = document.getElementById("choice-delete-purge");
+
+    if (choiceDeleteOnly) {
+        choiceDeleteOnly.addEventListener("click", function () {
+            activeDeleteTarget.purge = false;
+            choiceDeleteOnly.classList.add("selected");
+            if (choiceDeletePurge) choiceDeletePurge.classList.remove("selected");
+        });
+    }
+    if (choiceDeletePurge) {
+        choiceDeletePurge.addEventListener("click", function () {
+            activeDeleteTarget.purge = true;
+            choiceDeletePurge.classList.add("selected");
+            if (choiceDeleteOnly) choiceDeleteOnly.classList.remove("selected");
+        });
+    }
+    if (modalDeleteClose) modalDeleteClose.addEventListener("click", function () {
+        var m = document.getElementById("modal-delete-connector");
+        if (m) m.style.display = "none";
+    });
+    if (btnDeleteCancel) btnDeleteCancel.addEventListener("click", function () {
+        var m = document.getElementById("modal-delete-connector");
+        if (m) m.style.display = "none";
+    });
+    if (btnDeleteConfirmAction) {
+        btnDeleteConfirmAction.addEventListener("click", function () {
+            var actionPromise = null;
+            var accId = activeDeleteTarget.id;
+            var purge = Boolean(activeDeleteTarget.purge);
+
+            if (activeDeleteTarget.connectorType === "email") {
+                actionPromise = window.SovereignBridge.deleteAccount({ account_id: accId, purge_data: purge });
+            } else if (activeDeleteTarget.connectorType === "chat") {
+                actionPromise = window.SovereignBridge.deleteChatAccount({ account_id: accId, purge_data: purge });
+            } else if (activeDeleteTarget.connectorType === "calendar") {
+                actionPromise = window.SovereignBridge.deleteCalendarAccount({ account_id: accId, purge_data: purge });
+            }
+
+            if (actionPromise) {
+                btnDeleteConfirmAction.disabled = true;
+                actionPromise.then(function () {
+                    btnDeleteConfirmAction.disabled = false;
+                    var m = document.getElementById("modal-delete-connector");
+                    if (m) m.style.display = "none";
+                    loadAccountsAndFolders();
+                    loadMailbox();
+                    loadCalendarEvents();
+                    if (global.OldRAGChatView) global.OldRAGChatView.loadRooms();
+                }).catch(function (err) {
+                    btnDeleteConfirmAction.disabled = false;
+                    alert("Delete error: " + err.message);
+                });
+            }
+        });
+    }
+
+    // Admin Add Chat Button
+    var adminAddChatBtn = document.getElementById("admin-add-chat-btn");
+    if (adminAddChatBtn) {
+        adminAddChatBtn.addEventListener("click", function () {
+            var m = document.getElementById("chat-account-modal");
+            if (m) {
+                m.style.display = "flex";
+                m.classList.add("open");
+            }
+        });
+    }
+
+    var btnSaveChatAccount = document.getElementById("btn-save-chat-account");
+    if (btnSaveChatAccount) {
+        btnSaveChatAccount.addEventListener("click", function () {
+            var adapter = document.getElementById("chat-adapter-select") ? document.getElementById("chat-adapter-select").value : "rocketchat";
+            var name = document.getElementById("chat-acc-name") ? document.getElementById("chat-acc-name").value.trim() : "";
+            var url = document.getElementById("chat-acc-url") ? document.getElementById("chat-acc-url").value.trim() : "";
+            var user = document.getElementById("chat-acc-user") ? document.getElementById("chat-acc-user").value.trim() : "";
+            var token = document.getElementById("chat-acc-token") ? document.getElementById("chat-acc-token").value.trim() : "";
+            var lookback = document.getElementById("chat-acc-lookback") ? parseInt(document.getElementById("chat-acc-lookback").value, 10) : 30;
+
+            var acc = {
+                adapter_type: adapter,
+                name: name || (adapter.toUpperCase() + " Connection"),
+                server_url: url,
+                username: user,
+                credentials: { auth_token: token, password: token },
+                auth_token: token,
+                lookback_days: lookback || 30,
+                enabled: true
+            };
+            btnSaveChatAccount.disabled = true;
+            window.SovereignBridge.saveChatAccount(acc).then(function () {
+                btnSaveChatAccount.disabled = false;
+                var m = document.getElementById("chat-account-modal");
+                if (m) {
+                    m.style.display = "none";
+                    m.classList.remove("open");
+                }
+                loadAccountsAndFolders();
+                if (global.OldRAGChatView) global.OldRAGChatView.loadRooms();
+            }).catch(function (err) {
+                btnSaveChatAccount.disabled = false;
+                alert("Save chat account failed: " + err.message);
+            });
+        });
+    }
+
+    // Admin Add Calendar Button & Modal Handling
+    var adminAddCalBtn = document.getElementById("admin-add-cal-btn");
+    var modalCalAccount = document.getElementById("modal-cal-account");
+    var modalCalClose = document.getElementById("modal-cal-close");
+    var calAccCancelBtn = document.getElementById("cal-acc-cancel-btn");
+    var calAccSaveBtn = document.getElementById("cal-acc-save-btn");
+    var calAccType = document.getElementById("cal-acc-type");
+    var calAccName = document.getElementById("cal-acc-name");
+    var calAccUrl = document.getElementById("cal-acc-url");
+    var calAccUser = document.getElementById("cal-acc-user");
+    var calAccPass = document.getElementById("cal-acc-pass");
+    var calUrlRow = document.getElementById("cal-url-row");
+    var calCredsRow = document.getElementById("cal-creds-row");
+    var calSelectedColor = "#2563eb";
+
+    if (adminAddCalBtn && modalCalAccount) {
+        adminAddCalBtn.addEventListener("click", function () {
+            calAccName.value = "";
+            calAccUrl.value = "";
+            calAccUser.value = "";
+            calAccPass.value = "";
+            calSelectedColor = "#2563eb";
+            modalCalAccount.style.display = "flex";
+        });
+    }
+    if (modalCalClose && modalCalAccount) {
+        modalCalClose.addEventListener("click", function () { modalCalAccount.style.display = "none"; });
+    }
+    if (calAccCancelBtn && modalCalAccount) {
+        calAccCancelBtn.addEventListener("click", function () { modalCalAccount.style.display = "none"; });
+    }
+
+    // Swatches selection
+    document.querySelectorAll(".color-swatch-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+            document.querySelectorAll(".color-swatch-btn").forEach(function (b) { b.classList.remove("active"); });
+            btn.classList.add("active");
+            calSelectedColor = btn.getAttribute("data-color");
+        });
+    });
+    var customColorPicker = document.getElementById("cal-custom-color");
+    if (customColorPicker) {
+        customColorPicker.addEventListener("input", function () {
+            calSelectedColor = customColorPicker.value;
+            document.querySelectorAll(".color-swatch-btn").forEach(function (b) { b.classList.remove("active"); });
+        });
+    }
+
+    if (calAccType) {
+        calAccType.addEventListener("change", function () {
+            var val = calAccType.value;
+            if (val === "outlook_mapi") {
+                if (calUrlRow) calUrlRow.style.display = "none";
+                if (calCredsRow) calCredsRow.style.display = "none";
+            } else if (val === "google_calendar" || val === "confluence") {
+                if (calUrlRow) calUrlRow.style.display = "block";
+                if (calCredsRow) calCredsRow.style.display = "none";
+            } else {
+                if (calUrlRow) calUrlRow.style.display = "block";
+                if (calCredsRow) calCredsRow.style.display = "flex";
+            }
+        });
+    }
+
+    if (calAccSaveBtn) {
+        calAccSaveBtn.addEventListener("click", function () {
+            var acc = {
+                name: calAccName.value.trim() || "Calendar Connection",
+                connector_type: calAccType.value,
+                color: calSelectedColor,
+                url: calAccUrl.value.trim(),
+                username: calAccUser.value.trim(),
+                password: calAccPass.value.trim(),
+                enabled: true
+            };
+            calAccSaveBtn.disabled = true;
+            window.SovereignBridge.saveCalendarAccount(acc).then(function () {
+                calAccSaveBtn.disabled = false;
+                if (modalCalAccount) modalCalAccount.style.display = "none";
+                loadAccountsAndFolders();
+                loadCalendarEvents();
+            }).catch(function (err) {
+                calAccSaveBtn.disabled = false;
+                alert("Save calendar failed: " + err.message);
+            });
+        });
+    }
+
+    // Popout Component Triggers
+    var calPopoutBtn = document.getElementById("cal-popout-btn");
+    if (calPopoutBtn) {
+        calPopoutBtn.addEventListener("click", function () {
+            if (global.OldRAGWindowManager) {
+                global.OldRAGWindowManager.openWindow({
+                    id: "cal_unified",
+                    type: "calendar",
+                    target_id: "unified",
+                    title: "Calendar: Unified View",
+                });
+            }
+        });
+    }
+
+    var searchPopoutBtn = document.getElementById("search-popout-btn");
+    if (searchPopoutBtn) {
+        searchPopoutBtn.addEventListener("click", function () {
+            if (global.OldRAGWindowManager) {
+                global.OldRAGWindowManager.openWindow({
+                    id: "search_quick",
+                    type: "search",
+                    target_id: "quick_search",
+                    title: "Global Search",
+                });
+            }
+        });
+    }
+
+    var navBtnSaveLayout = document.getElementById("nav-btn-save-layout");
+    if (navBtnSaveLayout) {
+        navBtnSaveLayout.addEventListener("click", function () {
+            if (global.OldRAGWindowManager) {
+                global.OldRAGWindowManager.saveLayout();
+                var origText = navBtnSaveLayout.textContent;
+                navBtnSaveLayout.textContent = "✔ Saved!";
+                setTimeout(function () { navBtnSaveLayout.textContent = origText; }, 1500);
+            }
+        });
     }
 
     function renderSharedFoldersList(paths) {
@@ -1828,8 +2277,31 @@ document.addEventListener("DOMContentLoaded", function () {
 
     // Initial load
     loadMailbox();
+    if (window.OldRAGChatView) window.OldRAGChatView.init();
+    if (window.OldRAGSyncQuotaView) window.OldRAGSyncQuotaView.init();
+    if (window.OldRAGSearchView) window.OldRAGSearchView.init();
+
+    // Background event polling loop
+    var lastEventSeq = 0;
+    function pollServerEvents() {
+        if (window.OldRAGApi && typeof window.OldRAGApi.pollEvents === "function") {
+            window.OldRAGApi.pollEvents(lastEventSeq).then(function (resp) {
+                var data = resp.ok ? resp.data : resp;
+                if (data && data.latest_seq) {
+                    lastEventSeq = data.latest_seq;
+                }
+            }).catch(function () {}).finally(function () {
+                setTimeout(pollServerEvents, 4000);
+            });
+        } else {
+            setTimeout(pollServerEvents, 4000);
+        }
+    }
+    setTimeout(pollServerEvents, 2000);
+
     window.SovereignBridge.getStatus().then(function (s) {
-        updateDaemonStatus(s.daemon_running);
+        var running = s && s.daemon_running !== undefined ? s.daemon_running : (s.data && s.data.daemon_running);
+        updateDaemonStatus(Boolean(running));
     }).catch(function () {
         updateDaemonStatus(false);
     });

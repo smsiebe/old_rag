@@ -163,6 +163,8 @@ def cmd_mcp(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    from old_rag.logger import setup_logging
+    setup_logging(to_console=False)
     parser = argparse.ArgumentParser(prog="old-rag", description="Sovereign local Outlook & file RAG engine")
     subparsers = parser.add_subparsers(dest="command")
 

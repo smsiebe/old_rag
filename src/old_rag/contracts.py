@@ -75,6 +75,8 @@ class DesignExceptionError(OldRAGError):
 class SourceType(str, Enum):
     EMAIL = "EMAIL"
     FILE = "FILE"
+    CALENDAR = "CALENDAR"
+    CHAT = "CHAT"
 
 
 class RelevanceTier(str, Enum):
@@ -152,6 +154,35 @@ class RawAttachment(SovereignBaseModel):
     size_bytes: int
 
 
+class ChatIngestMeta(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    adapter_type: str
+    room_id: str
+    room_name: str
+    is_dm: bool = False
+    sender_id: str = ""
+    sender_name: str = ""
+    thread_root_id: Optional[str] = None
+    message_ids: List[str] = Field(default_factory=list)
+    reactions: Dict[str, List[str]] = Field(default_factory=dict)
+
+
+class CalendarIngestMeta(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    event_id: str
+    account_id: Optional[str] = None
+    location: Optional[str] = None
+    start_ts_utc: datetime
+    end_ts_utc: datetime
+    is_all_day: bool = False
+    organizer: Optional[str] = None
+    attendees: List[str] = Field(default_factory=list)
+    status: str = "CONFIRMED"
+
+
 class RawIngestPayload(SovereignBaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -169,6 +200,9 @@ class RawIngestPayload(SovereignBaseModel):
     body_html: Optional[str] = None
     attachments: List[RawAttachment] = Field(default_factory=list)
     raw_msg_bytes: Optional[bytes] = None
+    account_id: Optional[str] = None
+    chat_meta: Optional[ChatIngestMeta] = None
+    calendar_meta: Optional[CalendarIngestMeta] = None
 
 
 # --- Canonical Extracted Text DTO (CAS Tier 1) ---
@@ -212,6 +246,9 @@ class NormalizedDocumentJSON(SovereignBaseModel):
     document_metadata: Dict[str, Any] = Field(default_factory=dict)
     unstructured_annotations: List[str] = Field(default_factory=list)
     extracted_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    account_id: Optional[str] = None
+    chat_meta: Optional[ChatIngestMeta] = None
+    calendar_meta: Optional[CalendarIngestMeta] = None
 
 
 # --- Chunking & Search DTOs ---
@@ -242,6 +279,8 @@ class SearchQuery(SovereignBaseModel):
     sender: Optional[str] = None
     folder: Optional[str] = None
     source_type: Optional[SourceType] = None
+    source_types: Optional[List[SourceType]] = None
+    account_id: Optional[str] = None
 
 
 class SearchResult(SovereignBaseModel):
@@ -311,7 +350,11 @@ class CalendarEvent(SovereignBaseModel):
 
     event_id: str
     account_id: Optional[str] = None
-    source_type: SourceType = SourceType.EMAIL
+    calendar_id: Optional[str] = None
+    calendar_color: Optional[str] = "#339af0"
+    source_system: Optional[str] = "outlook"
+    doc_id: Optional[str] = None
+    source_type: SourceType = SourceType.CALENDAR
     subject: str = ""
     location: Optional[str] = None
     start_ts_utc: datetime
@@ -349,4 +392,243 @@ class EmailMessageSummary(SovereignBaseModel):
     is_read: bool = True
     is_starred: bool = False
     has_attachments: bool = False
+
+
+# --- Chat DTOs ---
+
+class ChatAdapterCapability(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    supports_dms: bool = True
+    supports_rooms: bool = True
+    supports_threads: bool = True
+    supports_streaming: bool = False
+    supports_send: bool = True
+
+
+class ChatPluginDescriptor(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    adapter_type: str
+    display_name: str
+    version: str = "1.0.0"
+    capabilities: ChatAdapterCapability = Field(default_factory=ChatAdapterCapability)
+    config_schema: Dict[str, Any] = Field(default_factory=dict)
+    is_builtin: bool = True
+
+
+class CalendarAccountConfig(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    connector_type: str = "outlook_mapi"  # outlook_mapi, google_calendar, exchange, confluence, caldav_ics
+    color: str = "#339af0"
+    url: Optional[str] = None
+    username: Optional[str] = None
+    credentials: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    sync_interval_mins: int = 15
+    created_at_utc: Optional[datetime] = None
+
+
+class ChatAccountConfig(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    name: str
+    adapter_type: str
+    server_url: str = ""
+    username: str = ""
+    credentials: Dict[str, str] = Field(default_factory=dict)
+    lookback_days: Optional[int] = 30
+    include_dms: bool = True
+    rooms: List[str] = Field(default_factory=list)
+    poll_interval_sec: float = 30.0
+    realtime_enabled: bool = True
+    enabled: bool = True
+    created_at_utc: Optional[datetime] = None
+
+
+class ChatRoomSummary(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    room_id: str
+    account_id: str
+    adapter_type: str
+    room_name: str
+    is_dm: bool
+    participant_count: int = 0
+    unread_count: int = 0
+    last_message_ts_utc: Optional[datetime] = None
+    last_snippet: str = ""
+    subscribed: bool = True
+
+
+class ChatMessageItem(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    message_id: str
+    doc_id: str
+    account_id: str
+    adapter_type: str
+    room_id: str
+    room_name: str
+    is_dm: bool
+    sender_id: str
+    sender_name: str
+    thread_root_id: Optional[str] = None
+    sent_ts_utc: datetime
+    body_text: str
+    reactions: Dict[str, List[str]] = Field(default_factory=dict)
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class OutgoingChatMessage(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str
+    room_id: str
+    body_text: str
+    thread_root_id: Optional[str] = None
+    attachments: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# --- Sync & Quota DTOs ---
+
+class SyncCursorRecord(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_key: str
+    source_type: SourceType
+    account_id: Optional[str] = None
+    high_watermark_cursor: Optional[str] = None
+    low_watermark_utc: Optional[datetime] = None
+    configured_lookback_days: Optional[int] = None
+    last_sync_utc: Optional[datetime] = None
+    status: str = "IDLE"
+    last_error: Optional[str] = None
+
+
+class SyncPolicyConfig(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_key: str
+    source_type: SourceType
+    account_id: Optional[str] = None
+    lookback_days: Optional[int] = 30
+    realtime_enabled: bool = True
+    poll_interval_sec: float = 30.0
+    enabled: bool = True
+
+
+class DashboardWindowConfig(SovereignBaseModel):
+    id: str
+    type: str  # "chat", "mail", "calendar", "search"
+    title: str = ""
+    target_id: Optional[str] = None
+    x: int = 100
+    y: int = 100
+    width: int = 480
+    height: int = 520
+    is_open: bool = True
+    auto_pop: bool = False
+    sound_enabled: bool = False
+
+
+class DashboardLayoutConfig(SovereignBaseModel):
+    windows: List[DashboardWindowConfig] = Field(default_factory=list)
+
+
+class QuotaPolicyType(str, Enum):
+    OLDEST_FIRST = "OLDEST_FIRST"
+    LRU_ACCESS = "LRU_ACCESS"
+    LOWEST_CENTRALITY = "LOWEST_CENTRALITY"
+    COMPOSITE_SCORE = "COMPOSITE_SCORE"
+
+
+class DataTypeQuotaConfig(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_type: SourceType
+    max_bytes: int = 0
+    soft_warning_ratio: float = 0.85
+    policy: QuotaPolicyType = QuotaPolicyType.COMPOSITE_SCORE
+    preserve_starred: bool = True
+    preserve_pinned: bool = True
+    preserve_recent_days: int = 14
+
+
+class EvictionCandidateSummary(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    doc_id: str
+    source_type: SourceType
+    subject: Optional[str] = None
+    sender: Optional[str] = None
+    received_ts_utc: Optional[datetime] = None
+    byte_size: int
+    estimated_freed_bytes: int
+    retention_score: float
+    reason: str
+
+
+class DataTypeQuotaStatus(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_type: SourceType
+    used_bytes: int
+    max_bytes: int
+    usage_ratio: float
+    document_count: int
+    chunk_count: int
+    shared_blob_bytes: int
+    exclusive_blob_bytes: int
+    policy: QuotaPolicyType
+    over_soft_limit: bool
+    over_hard_limit: bool
+
+
+class QuotaPurgeResult(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source_type: SourceType
+    dry_run: bool
+    evicted_doc_ids: List[str]
+    freed_bytes: int
+    used_bytes_before: int
+    used_bytes_after: int
+    candidates: List[EvictionCandidateSummary] = Field(default_factory=list)
+
+
+# --- UI Bridge & Event DTOs ---
+
+class BridgeErrorCode(str, Enum):
+    OK = "OK"
+    VALIDATION_ERROR = "VALIDATION_ERROR"
+    NOT_FOUND = "NOT_FOUND"
+    SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    QUOTA_EXCEEDED = "QUOTA_EXCEEDED"
+    SECURITY_VIOLATION = "SECURITY_VIOLATION"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+class BridgeResponseEnvelope(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ok: bool
+    status: int
+    data: Any = None
+    error: Optional[str] = None
+    error_code: BridgeErrorCode = BridgeErrorCode.OK
+
+
+class UIEventDTO(SovereignBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    seq: int
+    event_type: str
+    source_type: Optional[SourceType] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    created_at_utc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

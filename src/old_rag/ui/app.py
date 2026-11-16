@@ -19,6 +19,14 @@ class BridgeAPI:
         self._catalog = None
         self._search_engine = None
         self._explainer = None
+        self._bridge = None
+
+    def dispatch(self, action: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Dispatch a named action via OldRAGDesktopBridge, returning BridgeResponseEnvelope dictionary."""
+        if self._bridge is None:
+            from old_rag.ui.bridge import OldRAGDesktopBridge
+            self._bridge = OldRAGDesktopBridge(pipe_name=self.client.pipe_name)
+        return self._bridge.dispatch(action, payload)
 
     @staticmethod
     def _is_ipc_transport_error(res: Any) -> bool:
@@ -728,12 +736,18 @@ def setup_tray_icon(toggle_window_func, exit_func):
 def run_ui_app() -> None:
     """Entry point for Process 3 (sovereign-rag ui)."""
     import webview
+    from old_rag.logger import get_logger, setup_logging
+    setup_logging()
+    logger = get_logger("ui.app")
+    logger.info("Starting OldRAG Search Companion UI...")
 
     ensure_default_desktop()
 
-    static_dir = Path(__file__).parent / "static"
-    index_html = (static_dir / "index.html").resolve()
-    file_uri = index_html.as_uri()
+    from old_rag.ui.bridge import OldRAGDesktopBridge
+
+    bridge = OldRAGDesktopBridge()
+    html_content = bridge.render_desktop_html(inline_assets=True)
+    logger.info("Rendered desktop HTML (size=%d chars)", len(html_content))
 
     x, y = None, None
     if sys.platform == "win32":
@@ -741,18 +755,19 @@ def run_ui_app() -> None:
             import win32api
             sw = win32api.GetSystemMetrics(0)
             sh = win32api.GetSystemMetrics(1)
-            x = max(50, (sw - 740) // 2)
-            y = max(50, (sh - 560) // 2)
+            x = max(50, (sw - 1360) // 2)
+            y = max(50, (sh - 860) // 2)
         except Exception:
             pass
 
     api = BridgeAPI()
     window = webview.create_window(
         title="OldRAG Search Companion",
-        url=file_uri,
+        html=html_content,
         js_api=api,
-        width=740,
-        height=560,
+        width=1360,
+        height=860,
+        min_size=(960, 640),
         x=x,
         y=y,
         resizable=True,
@@ -762,6 +777,7 @@ def run_ui_app() -> None:
 
     def toggle_window():
         try:
+            logger.info("Toggle window requested")
             window.show()
             window.restore()
             bring_window_to_front("OldRAG Search Companion")
@@ -770,6 +786,7 @@ def run_ui_app() -> None:
 
     def exit_app():
         nonlocal icon
+        logger.info("Exiting OldRAG Search Companion...")
         try:
             if icon:
                 icon.stop()
@@ -782,6 +799,7 @@ def run_ui_app() -> None:
 
     def on_window_closed():
         nonlocal icon
+        logger.info("OldRAG Search Companion window closed")
         try:
             if icon:
                 icon.stop()
@@ -794,6 +812,46 @@ def run_ui_app() -> None:
         import time
         time.sleep(0.3)
         bring_window_to_front("OldRAG Search Companion")
+
+    # Start in-process sync worker if daemon is offline
+    def _in_process_sync_loop():
+        import time
+        sync_log = get_logger("ui.sync")
+        # Give UI a moment to open and show before triggering heavy sync
+        time.sleep(2.0)
+        try:
+            status = api.client.call({"action": "status"})
+            if not api._is_ipc_transport_error(status):
+                sync_log.info("Background daemon is standing; skipping in-process sync loop.")
+                return
+        except Exception:
+            pass
+
+        sync_log.info("Background daemon offline (In-Process Mode). Starting in-process sync worker...")
+        # Initial sync cycle
+        try:
+            sync_log.info("Triggering initial in-process sync...")
+            api.dispatch("trigger_sync", {})
+            sync_log.info("Initial in-process sync cycle completed.")
+        except Exception as e:
+            sync_log.warning("Initial in-process sync error: %s", e)
+
+        # Periodic background sync loop (every 60 seconds)
+        while True:
+            time.sleep(60.0)
+            try:
+                # Check if daemon came online
+                status = api.client.call({"action": "status"})
+                if not api._is_ipc_transport_error(status):
+                    sync_log.info("Background daemon detected online; yielding sync execution.")
+                    break
+                sync_log.debug("Running periodic in-process sync...")
+                api.dispatch("trigger_sync", {})
+            except Exception as e:
+                sync_log.debug("Periodic in-process sync iteration error: %s", e)
+
+    sync_thread = threading.Thread(target=_in_process_sync_loop, daemon=True, name="OldRAGInProcessSync")
+    sync_thread.start()
 
     # Start helper threads
     start_hotkey_listener(toggle_window)

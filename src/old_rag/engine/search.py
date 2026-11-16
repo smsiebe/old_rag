@@ -146,9 +146,12 @@ class HybridSearchEngine(SearchEngineProtocol):
         if query.sender:
             sql += " AND sender = ?"
             params.append(query.sender)
-        if query.source_type:
-            sql += " AND source_type = ?"
-            params.append(query.source_type.value)
+
+        effective_types = query.source_types or ([query.source_type] if query.source_type else None)
+        if effective_types:
+            placeholders = ",".join(["?"] * len(effective_types))
+            sql += f" AND source_type IN ({placeholders})"
+            params.extend([st.value if hasattr(st, "value") else str(st) for st in effective_types])
 
         sql += " ORDER BY score ASC LIMIT ?"
         params.append(query.top_k)
@@ -248,8 +251,11 @@ class HybridSearchEngine(SearchEngineProtocol):
                 where_clauses.append(f"folder = '{query.folder}'")
             if query.sender:
                 where_clauses.append(f"sender = '{query.sender}'")
-            if query.source_type:
-                where_clauses.append(f"source_type = '{query.source_type.value}'")
+
+            effective_types = query.source_types or ([query.source_type] if query.source_type else None)
+            if effective_types:
+                st_clauses = [f"source_type = '{st.value if hasattr(st, 'value') else st}'" for st in effective_types]
+                where_clauses.append(f"({' OR '.join(st_clauses)})")
 
             if where_clauses:
                 search_builder = search_builder.where(" AND ".join(where_clauses), prefilter=True)
@@ -313,6 +319,25 @@ class HybridSearchEngine(SearchEngineProtocol):
             except Exception:
                 pass
 
+        # Check document_entities matching in catalog for identifier tokens
+        entity_boosted_cids: Set[str] = set()
+        if self.catalog and hasattr(self.catalog, "_get_connection"):
+            try:
+                conn = self.catalog._get_connection()
+                for tok in identifier_tokens:
+                    if len(tok) >= 2:
+                        cur = conn.execute(
+                            "SELECT DISTINCT doc_id FROM document_entities WHERE entity_value LIKE ?",
+                            (f"%{tok}%",),
+                        )
+                        for row in cur.fetchall():
+                            matched_did = row[0]
+                            for cid in all_chunk_ids:
+                                if cid == matched_did or cid.startswith(f"{matched_did}_"):
+                                    entity_boosted_cids.add(cid)
+            except Exception:
+                pass
+
         for cid in all_chunk_ids:
             l_rank = lexical_ranks.get(cid)
             v_rank = vector_ranks.get(cid)
@@ -338,11 +363,14 @@ class HybridSearchEngine(SearchEngineProtocol):
             folder_val = doc_meta.get("folder") or l_row.get("folder") or v_row.get("folder") or query.folder
 
             raw_st = doc_meta.get("source_type") or l_row.get("source_type") or v_row.get("source_type")
-            source_type_val = SourceType(raw_st) if raw_st in ("EMAIL", "FILE") else SourceType.EMAIL
+            try:
+                source_type_val = SourceType(raw_st) if raw_st else SourceType.EMAIL
+            except ValueError:
+                source_type_val = SourceType.EMAIL
 
             # Check exact substring match for identifier tokens
-            is_exact_ident = False
-            if has_identifier:
+            is_exact_ident = cid in entity_boosted_cids
+            if not is_exact_ident and has_identifier:
                 content_lower = (l_row.get("content") or v_row.get("content") or content_text).lower()
                 for ident in identifier_tokens:
                     clean_id = ident.lower()
@@ -469,6 +497,7 @@ def resolve_related_context(
             "success": True,
             "related_files": [],
             "related_emails": [],
+            "related_chats": [],
             "related_calendar": [],
             "query_used": "",
         }
@@ -478,6 +507,8 @@ def resolve_related_context(
 
     related_files = []
     related_emails = []
+    related_chats = []
+    related_cal = []
     seen_doc_ids = set()
     if doc_id:
         seen_doc_ids.add(doc_id)
@@ -487,28 +518,36 @@ def resolve_related_context(
             continue
         seen_doc_ids.add(h.doc_id)
 
-        is_file = (h.source_type == SourceType.FILE) or (
-            h.original_path
-            and not h.original_path.startswith("Outlook://")
-            and not h.original_path.startswith("mailbox://")
-            and not h.original_path.endswith(".msg")
-            and (h.original_path.startswith("/") or (len(h.original_path) > 2 and h.original_path[1] == ":") or h.original_path.startswith("\\\\"))
-        )
         h_dict = h.model_dump(mode="json")
-        if is_file:
+        if h.source_type == SourceType.CHAT:
+            related_chats.append(h_dict)
+        elif h.source_type == SourceType.CALENDAR:
+            related_cal.append(h_dict)
+        elif h.source_type == SourceType.FILE:
             related_files.append(h_dict)
         else:
-            related_emails.append(h_dict)
+            is_file = bool(
+                h.original_path
+                and not h.original_path.startswith("Outlook://")
+                and not h.original_path.startswith("mailbox://")
+                and not h.original_path.endswith(".msg")
+                and (h.original_path.startswith("/") or (len(h.original_path) > 2 and h.original_path[1] == ":") or h.original_path.startswith("\\\\"))
+            )
+            if is_file:
+                related_files.append(h_dict)
+            else:
+                related_emails.append(h_dict)
 
     # 4. Search calendar
-    related_cal = []
     if calendar_manager:
         try:
             cal_events = calendar_manager.search_events(query_str, limit=top_k)
             for evt in cal_events:
                 if doc_id and evt.event_id == doc_id:
                     continue
-                related_cal.append(evt.model_dump(mode="json"))
+                evt_dict = evt.model_dump(mode="json")
+                if not any(c.get("doc_id") == evt.doc_id or c.get("event_id") == evt.event_id for c in related_cal):
+                    related_cal.append(evt_dict)
         except Exception:
             pass
 
@@ -516,6 +555,7 @@ def resolve_related_context(
         "success": True,
         "related_files": related_files[:top_k],
         "related_emails": related_emails[:top_k],
+        "related_chats": related_chats[:top_k],
         "related_calendar": related_cal[:top_k],
         "query_used": query_str,
     }

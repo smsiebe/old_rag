@@ -267,6 +267,34 @@ def _explain_search_hit_tier1(
     if cas_doc and getattr(cas_doc, "attachments", None):
         attachment_names = [a.filename for a in cas_doc.attachments if getattr(a, "filename", None)]
 
+    chat_info = None
+    if source_type == "CHAT" or (cas_doc and getattr(cas_doc, "chat_meta", None)):
+        if cas_doc and getattr(cas_doc, "chat_meta", None):
+            chat_info = cas_doc.chat_meta.model_dump(mode="json")
+        elif catalog and hasattr(catalog, "_get_connection"):
+            try:
+                conn = catalog._get_connection()
+                cur = conn.execute("SELECT * FROM chat_messages WHERE doc_id = ? LIMIT 1", (doc_id,))
+                c_row = cur.fetchone()
+                if c_row:
+                    chat_info = dict(c_row)
+            except Exception:
+                pass
+
+    calendar_info = None
+    if source_type == "CALENDAR" or (cas_doc and getattr(cas_doc, "calendar_meta", None)):
+        if cas_doc and getattr(cas_doc, "calendar_meta", None):
+            calendar_info = cas_doc.calendar_meta.model_dump(mode="json")
+        elif catalog and hasattr(catalog, "_get_connection"):
+            try:
+                conn = catalog._get_connection()
+                cur = conn.execute("SELECT * FROM calendar_events WHERE doc_id = ? OR event_id = ? LIMIT 1", (doc_id, doc_id))
+                cal_row = cur.fetchone()
+                if cal_row:
+                    calendar_info = dict(cal_row)
+            except Exception:
+                pass
+
     # Query lexical_fts.db for unclipped chunk text & per-token FTS5 evidence
     full_content = ""
     highlighted_passage = ""
@@ -510,6 +538,8 @@ def _explain_search_hit_tier1(
             "original_path": original_path,
             "received_ts_utc": received_ts_utc,
             "attachments": _json_safe_value(attachment_names),
+            "chat_meta": _json_safe_value(chat_info),
+            "calendar_meta": _json_safe_value(calendar_info),
         },
         "query_analysis": q_info,
         "channels_matched": channels_matched,

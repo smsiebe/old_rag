@@ -5,7 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>OldRAG Sovereign Personal Retrieval &amp; Mail</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="api.js"></script>
     <script src="bridge.js"></script>
+    <script src="window_manager.js"></script>
+    <script src="view_search.js"></script>
+    <script src="view_mail.js"></script>
+    <script src="view_chat.js"></script>
+    <script src="view_calendar.js"></script>
+    <script src="view_sync_quota.js"></script>
     <script src="app.js"></script>
 </head>
 <body>
@@ -18,11 +25,14 @@
                 <span class="sovereign-tag">100% Sovereign &amp; Offline</span>
             </div>
             <nav class="nav-tabs">
-                <button class="nav-tab active" data-tab="tab-mail">📧 Mail</button>
-                <button class="nav-tab" data-tab="tab-calendar">📅 Calendar</button>
                 <button class="nav-tab" data-tab="tab-search">🔍 Global Search</button>
+                <button class="nav-tab active" data-tab="tab-mail">📧 Mail</button>
+                <button class="nav-tab" data-tab="tab-chat">💬 Chat</button>
+                <button class="nav-tab" data-tab="tab-calendar">📅 Calendar</button>
+                <button class="nav-tab" data-tab="tab-sync-quota">⚡ Sync &amp; Quotas</button>
             </nav>
             <div class="nav-right">
+                <button class="btn btn-sm btn-secondary" id="nav-btn-save-layout" title="Save floating windows layout to restore on next launch">💾 Save Layout</button>
                 <!-- Compact Admin & Settings Dropdown Menu -->
                 <div class="admin-dropdown-wrap" id="admin-dropdown-wrap">
                     <button class="admin-dropdown-btn" id="admin-dropdown-btn" type="button" aria-haspopup="true" aria-expanded="false" title="Administration &amp; System Configuration">
@@ -152,6 +162,7 @@
                     <div class="cal-view-group">
                         <button id="cal-view-month" class="btn btn-secondary active">Month Grid</button>
                         <button id="cal-view-agenda" class="btn btn-secondary">Agenda List</button>
+                        <button id="cal-popout-btn" class="btn btn-secondary" title="Pop out calendar into a floating window">⧉ Pop Out</button>
                         <button id="cal-new-event-btn" class="btn btn-primary">➕ New Event</button>
                     </div>
                 </div>
@@ -219,6 +230,16 @@
                         <button class="pill-btn" data-tier="LOW">Low (&lt;45%)</button>
                     </div>
 
+                    <div class="source-filter-pills" style="display:flex; gap:6px; margin: 8px 0; align-items:center;">
+                        <span style="font-size:12px; color:var(--text-muted); font-weight:600;">Channel Filter:</span>
+                        <button class="pill-btn active source-filter-pill" data-source="ALL">All Sources</button>
+                        <button class="pill-btn source-filter-pill" data-source="EMAIL">📧 Mail</button>
+                        <button class="pill-btn source-filter-pill" data-source="CHAT">💬 Chat</button>
+                        <button class="pill-btn source-filter-pill" data-source="CALENDAR">📅 Calendar</button>
+                        <button class="pill-btn source-filter-pill" data-source="FILE">📄 Files</button>
+                        <button id="search-popout-btn" class="btn btn-sm btn-secondary" style="margin-left:auto;" title="Pop out search into a floating window">⧉ Pop Out</button>
+                    </div>
+
                     <div class="results-stats">
                         <span id="results-count-text">Ready</span>
                     </div>
@@ -273,28 +294,42 @@
                 </div>
             </section>
 
-            <!-- TAB 5: ACCOUNTS & FOLDERS -->
+            <!-- TAB 5: ACCOUNTS & FOLDERS (UNIFIED CONNECTORS CENTER) -->
             <section id="tab-accounts" class="tab-pane">
                 <div class="section-header">
                     <div>
-                        <h2>Email Accounts &amp; Shared Folders</h2>
-                        <p class="subtitle">Connect any number of Exchange, Outlook, IMAP, and Gmail accounts, and manage shared filesystem indices.</p>
+                        <h2>Connectors, Accounts &amp; Integrations</h2>
+                        <p class="subtitle">Unified administration of Email, Chat, Calendar connectors, and monitored filesystem indices.</p>
                     </div>
                     <div class="header-action-group">
                         <button class="btn btn-secondary nav-return-btn" data-return="tab-mail">← Back to Mail</button>
-                        <button id="add-account-btn" class="btn btn-primary">➕ Add Email Account</button>
+                        <button id="add-account-btn" class="btn btn-primary">➕ Add Email</button>
+                        <button id="admin-add-chat-btn" class="btn btn-primary">➕ Add Chat</button>
+                        <button id="admin-add-cal-btn" class="btn btn-primary">➕ Add Calendar</button>
                     </div>
                 </div>
 
                 <div id="accounts-save-alert" class="alert-box alert-success" style="display:none;"></div>
 
-                <!-- Configured Accounts List -->
+                <!-- 1. Email Connections List -->
                 <h3 class="subsection-title">Active Email Connections</h3>
                 <div id="accounts-cards-container" class="accounts-grid">
                     <!-- Populated dynamically -->
                 </div>
 
-                <!-- Shared Filesystem Folders & Head-of-Folder Indexing -->
+                <!-- 2. Chat Connections List -->
+                <h3 class="subsection-title" style="margin-top:28px;">Active Chat Connections &amp; Plugins</h3>
+                <div id="chat-accounts-cards-container" class="accounts-grid">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- 3. Calendar Connections List -->
+                <h3 class="subsection-title" style="margin-top:28px;">Active Calendar Connections (Multi-Calendar &amp; Color Coded)</h3>
+                <div id="calendar-accounts-cards-container" class="accounts-grid">
+                    <!-- Populated dynamically -->
+                </div>
+
+                <!-- 4. Shared Filesystem Folders & Head-of-Folder Indexing -->
                 <h3 class="subsection-title" style="margin-top:28px;">Shared Filesystem Folders &amp; Head-of-Folder Caches</h3>
                 <div class="card">
                     <p>Place indexes directly at the head of monitored folders (<code>&lt;folder&gt;/.oldrag/index.db</code>) with cooperative file locking (<code>.oldrag/index.lock</code>) for concurrent multi-user shared drives.</p>
@@ -455,6 +490,133 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: CHAT WORKSPACE (PILLAR 2) -->
+            <section id="tab-chat" class="tab-pane">
+                <div class="chat-workspace-layout">
+                    <aside class="chat-sidebar">
+                        <div class="chat-sidebar-header">
+                            <button id="btn-manage-subscriptions" class="btn btn-sm btn-secondary btn-block">🔔 Subscribed Channels</button>
+                        </div>
+                        <div class="chat-rooms-tree" id="chat-rooms-tree">
+                            <div class="loading-placeholder">Loading rooms...</div>
+                        </div>
+                    </aside>
+                    <div class="chat-conversation-pane">
+                        <div class="chat-header-bar" id="chat-header-bar" style="display:flex; justify-content:space-between; align-items:center;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span id="chat-source-badge" class="badge badge-info" style="display:none;"></span>
+                                <span id="chat-active-title" style="font-weight:600;">Select a chat channel or direct message</span>
+                            </div>
+                            <button id="chat-popout-btn" class="btn btn-sm btn-secondary" style="display:none;" title="Pop out this chat channel into a floating dashboard window">⧉ Pop Out</button>
+                        </div>
+                        <div class="chat-messages-timeline" id="chat-messages-timeline">
+                            <div class="empty-state">Select a chat room or direct message on the left to read messages.</div>
+                        </div>
+                        <div class="chat-input-bar">
+                            <input type="text" id="chat-message-input" class="form-input" placeholder="Type a message or reply...">
+                            <button id="btn-send-chat-msg" class="btn btn-primary">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB: REAL-TIME SYNC, HARD-DRIVE QUOTAS & ADMIN (PILLAR 5) -->
+            <section id="tab-sync-quota" class="tab-pane">
+                <div class="sync-quota-layout">
+                    <div class="section-header">
+                        <div>
+                            <h2>Real-Time Sync &amp; Storage Quotas</h2>
+                            <p class="subtitle">Multi-source real-time cursors, two-sided watermark gap backfill, and multi-tier hard-drive quota protection.</p>
+                        </div>
+                        <div>
+                            <button id="btn-sync-all-now" class="btn btn-primary">🔄 Sync All Now</button>
+                        </div>
+                    </div>
+
+                    <!-- Per-Connector Sync Table -->
+                    <div class="card">
+                        <h3>Real-Time Connector Status &amp; Watermarks</h3>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Connector / Source</th>
+                                        <th>Status</th>
+                                        <th>Low Watermark (UTC)</th>
+                                        <th>Cursor / High Watermark</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="sync-status-tbody">
+                                    <tr><td colspan="5" class="loading-state">Loading sync status...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Per-Data-Type Hard Drive Quotas -->
+                    <div class="card">
+                        <h3>Hard-Drive Quota Governors</h3>
+                        <p class="subtitle">Storage allocation per data type. Note: Purging internal records NEVER deletes your original files on disk.</p>
+                        <div class="quota-cards-grid" id="quota-cards-container">
+                            <div class="loading-placeholder">Loading quota status...</div>
+                        </div>
+                    </div>
+
+                    <!-- Eviction & Policy Management -->
+                    <div class="card">
+                        <h3>Quota Eviction Policy &amp; Candidate Preview</h3>
+                        <div style="display:flex; gap:12px; align-items:center; margin-bottom:16px; flex-wrap:wrap;">
+                            <label>Data Type:</label>
+                            <select id="eviction-source-type-select" class="form-select">
+                                <option value="EMAIL">EMAIL</option>
+                                <option value="CHAT">CHAT</option>
+                                <option value="CALENDAR">CALENDAR</option>
+                                <option value="FILE">FILE</option>
+                            </select>
+
+                            <label>Eviction Strategy:</label>
+                            <select id="quota-policy-select" class="form-select">
+                                <option value="COMPOSITE_SCORE">COMPOSITE_SCORE (Recency + Centrality + Access)</option>
+                                <option value="LOWEST_CENTRALITY">LOWEST_CENTRALITY (Orphaned / Unreferenced)</option>
+                                <option value="LRU_ACCESS">LRU_ACCESS (Least Recently Accessed)</option>
+                                <option value="OLDEST_FIRST">OLDEST_FIRST (Timestamp Ascending)</option>
+                            </select>
+
+                            <button id="btn-quota-preview-eviction" class="btn btn-secondary">🔍 Preview Eviction</button>
+                            <button id="btn-quota-purge-now" class="btn btn-danger">🗑️ Purge Over-Quota Now</button>
+                        </div>
+
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Doc ID</th>
+                                        <th>Subject / Title</th>
+                                        <th>Size</th>
+                                        <th>Score</th>
+                                        <th>Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="eviction-preview-tbody">
+                                    <tr><td colspan="5" class="empty-state">Click "Preview Eviction" to score candidates according to policy.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Head of Folder Scanner -->
+                    <div class="card">
+                        <h3>Head-of-Folder Filesystem Ingestion</h3>
+                        <p class="subtitle">Index top folder metadata and readmes without ingesting raw bulk contents.</p>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="hof-path-input" class="form-input" style="flex:1;" placeholder="C:\Users\username\Documents\Projects">
+                            <button id="btn-scan-head-of-folder" class="btn btn-secondary">Scan Folder</button>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -725,6 +887,204 @@
             <div class="modal-footer explain-modal-footer">
                 <button type="button" id="explain-retry-btn" class="btn btn-secondary" style="display:none;">🔄 Retry AuraRouter</button>
                 <button type="button" id="explain-close-btn" class="btn btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 6: CHAT ACCOUNT SETUP -->
+    <div id="chat-account-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3>💬 Connect Chat Account</h3>
+                <button type="button" class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open'); this.closest('.modal-overlay').style.display='none';">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Adapter / Plugin:</label>
+                        <select id="chat-adapter-select" class="form-select full-width">
+                            <option value="rocketchat">Rocket.Chat (Self-Hosted)</option>
+                            <option value="google_chat">Google Chat (Google Workspace)</option>
+                            <option value="teams">Microsoft Teams (Graph API)</option>
+                            <option value="jabber">Jabber / XMPP (XEP-0045/0313)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Account Label / Name:</label>
+                        <input type="text" id="chat-acc-name" class="form-input" placeholder="e.g. Work RocketChat">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Server URL / Host:</label>
+                        <input type="text" id="chat-acc-url" class="form-input" placeholder="https://chat.mycorp.com">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col">
+                        <label>Username / User ID:</label>
+                        <input type="text" id="chat-acc-user" class="form-input">
+                    </div>
+                    <div class="form-col">
+                        <label>Token / Password:</label>
+                        <input type="password" id="chat-acc-token" class="form-input">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Initial Lookback Window (Days):</label>
+                        <input type="number" id="chat-acc-lookback" class="form-input" value="30" min="1" max="365">
+                        <span class="form-hint">Sync scheduler will backfill historical chat messages up to this window.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').classList.remove('open'); this.closest('.modal-overlay').style.display='none';">Cancel</button>
+                <button type="button" id="btn-save-chat-account" class="btn btn-primary">Save &amp; Connect</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 7: CHAT SUBSCRIPTIONS -->
+    <div id="chat-subscriptions-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3>🔔 Manage Room Subscriptions</h3>
+                <button type="button" class="modal-close" onclick="this.closest('.modal-overlay').classList.remove('open'); this.closest('.modal-overlay').style.display='none';">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="subtitle">Select which chat rooms to ingest into your sovereign local archive.</p>
+                <div id="chat-subscriptions-list" class="subscriptions-list" style="max-height:300px; overflow-y:auto; margin-top:12px;">
+                    <div class="loading-placeholder">Loading rooms...</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').classList.remove('open'); this.closest('.modal-overlay').style.display='none';">Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 8: PURGE ACCOUNT DATA CONFIRMATION -->
+    <div id="modal-purge-confirm" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3>🧹 Purge Account Data</h3>
+                <button type="button" class="modal-close" id="modal-purge-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to purge all indexed data for <strong id="purge-target-name">this account</strong>?</p>
+                <div class="alert-box alert-warning" style="margin-top:12px;">
+                    <strong>Offline Safety Invariant:</strong>
+                    <p style="margin:4px 0 0 0; font-size:12px;">
+                        This will permanently delete all indexed messages, search vectors (LanceDB), and lexical entries (FTS5) for this connection from your local OldRAG database.
+                        <strong>Your original files on disk or in the remote system will NEVER be modified or deleted.</strong>
+                    </p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="btn-purge-cancel">Cancel</button>
+                <button type="button" class="btn btn-danger" id="btn-purge-confirm-action">🧹 Purge Data Now</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 9: DELETE CONNECTOR OPTIONS MODAL -->
+    <div id="modal-delete-connector" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3>🗑️ Remove Connection</h3>
+                <button type="button" class="modal-close" id="modal-delete-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>You are removing the connection: <strong id="delete-connector-name">Connection</strong>.</p>
+                <p class="subtitle" style="margin-bottom:14px;">Choose how OldRAG should handle existing documents and emails indexed from this source:</p>
+
+                <div class="delete-choice-card selected" id="choice-delete-only" data-purge="false">
+                    <div class="delete-choice-title">Option 1: Keep Indexed Data (Delete Connection Only)</div>
+                    <div class="delete-choice-desc">Removes connector configuration so no further polling occurs. Previously indexed emails and documents remain in your sovereign search index.</div>
+                </div>
+
+                <div class="delete-choice-card danger" id="choice-delete-purge" data-purge="true">
+                    <div class="delete-choice-title">Option 2: Delete Connection &amp; Purge All Data</div>
+                    <div class="delete-choice-desc">Removes connector configuration AND permanently wipes all indexed documents, LanceDB embeddings, and CAS cache belonging to this source. (Original host files remain untouched).</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" id="btn-delete-cancel">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btn-delete-confirm-action">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 10: ADD / EDIT CALENDAR ACCOUNT -->
+    <div id="modal-cal-account" class="modal-overlay" style="display:none;">
+        <div class="modal-box modal-md">
+            <div class="modal-header">
+                <h3 id="modal-cal-title">📅 Add Calendar Connection</h3>
+                <button type="button" class="modal-close" id="modal-cal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Calendar Provider / Type:</label>
+                        <select id="cal-acc-type" class="form-select full-width">
+                            <option value="outlook_mapi">Classic Outlook (MAPI)</option>
+                            <option value="google_calendar">Google Calendar (ICS Feed / CalDAV)</option>
+                            <option value="exchange">Microsoft Exchange / OWA</option>
+                            <option value="confluence">Confluence Team Calendars (ICS)</option>
+                            <option value="caldav_ics">Generic CalDAV or Local .ICS File</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Calendar Name / Label:</label>
+                        <input type="text" id="cal-acc-name" class="form-input" placeholder="e.g. Work Calendar, Project Sprints">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-col full-width">
+                        <label>Color Code (for multi-calendar color-coding):</label>
+                        <div class="color-picker-row" id="cal-color-picker">
+                            <button type="button" class="color-swatch-btn active" data-color="#2563eb" style="background:#2563eb;" title="Blue"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#10b981" style="background:#10b981;" title="Green"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#f59e0b" style="background:#f59e0b;" title="Amber"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#8b5cf6" style="background:#8b5cf6;" title="Purple"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#ef4444" style="background:#ef4444;" title="Red"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#06b6d4" style="background:#06b6d4;" title="Cyan"></button>
+                            <button type="button" class="color-swatch-btn" data-color="#ec4899" style="background:#ec4899;" title="Pink"></button>
+                            <input type="color" id="cal-custom-color" value="#2563eb" style="width:28px; height:28px; padding:0; border:none; cursor:pointer;" title="Custom Color">
+                        </div>
+                    </div>
+                </div>
+
+                <div id="cal-url-row" class="form-row">
+                    <div class="form-col full-width">
+                        <label id="cal-url-label">Feed URL or File Path:</label>
+                        <input type="text" id="cal-acc-url" class="form-input" placeholder="https://calendar.google.com/calendar/ical/.../basic.ics">
+                        <span class="form-hint" id="cal-url-hint">For Google Calendar, copy your secret iCal address from Calendar Settings.</span>
+                    </div>
+                </div>
+
+                <div id="cal-creds-row" class="form-row" style="display:none;">
+                    <div class="form-col">
+                        <label>Username (optional):</label>
+                        <input type="text" id="cal-acc-user" class="form-input" placeholder="username">
+                    </div>
+                    <div class="form-col">
+                        <label>Password / App Password:</label>
+                        <input type="password" id="cal-acc-pass" class="form-input" placeholder="password">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span id="cal-acc-status" class="status-inline"></span>
+                <button type="button" class="btn btn-secondary" id="cal-acc-cancel-btn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="cal-acc-save-btn">Save Calendar</button>
             </div>
         </div>
     </div>

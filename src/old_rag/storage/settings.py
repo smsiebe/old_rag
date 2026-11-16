@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from old_rag.contracts import DataTypeQuotaConfig, SourceType
 from old_rag.storage.cas import get_default_app_data_dir
 
 
@@ -24,6 +25,22 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
             "enabled": True,
         }
     ],
+    "chat_accounts": [],
+    "calendar_accounts": [
+        {
+            "id": "default_outlook_cal",
+            "name": "Classic Outlook Calendar",
+            "connector_type": "outlook_mapi",
+            "color": "#339af0",
+            "enabled": True,
+            "sync_interval_mins": 15,
+        }
+    ],
+    "dashboard_layout": {
+        "windows": []
+    },
+    "sync_policies": {},
+    "quotas": {st.value: DataTypeQuotaConfig(source_type=st).model_dump() for st in SourceType},
     "connectors": {
         "outlook": {
             "enabled": True,
@@ -127,6 +144,17 @@ def load_settings() -> Dict[str, Any]:
                 else:
                     merged["connectors"][k] = v
 
+        if "chat_accounts" in data and isinstance(data["chat_accounts"], list):
+            merged["chat_accounts"] = data["chat_accounts"]
+        if "calendar_accounts" in data and isinstance(data["calendar_accounts"], list):
+            merged["calendar_accounts"] = data["calendar_accounts"]
+        if "dashboard_layout" in data and isinstance(data["dashboard_layout"], dict):
+            merged["dashboard_layout"] = data["dashboard_layout"]
+        if "sync_policies" in data and isinstance(data["sync_policies"], dict):
+            merged["sync_policies"] = data["sync_policies"]
+        if "quotas" in data and isinstance(data["quotas"], dict):
+            merged["quotas"].update(data["quotas"])
+
         if "aurarouter" in data and isinstance(data["aurarouter"], dict):
             merged["aurarouter"].update(data["aurarouter"])
         return merged
@@ -141,14 +169,48 @@ def save_settings(settings: Dict[str, Any]) -> None:
     path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
 
 
-def get_accounts() -> List[Dict[str, Any]]:
+def _get_key_manager():
+    from old_rag.storage.cas import KeyManager
+    return KeyManager(get_default_app_data_dir() / "master_key.dpapi")
+
+
+def encrypt_secret(val: str) -> str:
+    """Encrypt a secret string using KeyManager AES-256-GCM. Idempotent."""
+    if not val:
+        return ""
+    try:
+        return _get_key_manager().encrypt_secret(val)
+    except Exception:
+        return val
+
+
+def decrypt_secret(val: str) -> str:
+    """Decrypt a secret string using KeyManager AES-256-GCM. Idempotent."""
+    if not val:
+        return ""
+    try:
+        return _get_key_manager().decrypt_secret(val)
+    except Exception:
+        return val
+
+
+def get_accounts(decrypt: bool = False) -> List[Dict[str, Any]]:
     """Return all configured email accounts."""
     settings = load_settings()
-    return settings.get("accounts", [])
+    accounts = settings.get("accounts", [])
+    if decrypt:
+        decrypted = []
+        for acc in accounts:
+            copy_a = json.loads(json.dumps(acc))
+            if "password" in copy_a:
+                copy_a["password"] = decrypt_secret(copy_a["password"])
+            decrypted.append(copy_a)
+        return decrypted
+    return accounts
 
 
 def save_account(account: Dict[str, Any]) -> Dict[str, Any]:
-    """Add or update an email account in settings."""
+    """Add or update an email account in settings, encrypting secrets."""
     settings = load_settings()
     accounts = settings.get("accounts", [])
     acc_id = account.get("id")
@@ -157,19 +219,28 @@ def save_account(account: Dict[str, Any]) -> Dict[str, Any]:
         acc_id = f"acc_{uuid.uuid4().hex[:8]}"
         account["id"] = acc_id
 
+    stored = json.loads(json.dumps(account))
+    if "password" in stored and stored["password"]:
+        stored["password"] = encrypt_secret(stored["password"])
+
     existing_idx = next((i for i, a in enumerate(accounts) if a.get("id") == acc_id), -1)
     if existing_idx >= 0:
-        accounts[existing_idx] = account
+        accounts[existing_idx] = stored
     else:
-        accounts.append(account)
+        accounts.append(stored)
 
     settings["accounts"] = accounts
     save_settings(settings)
-    return account
+    return stored
 
 
-def delete_account(account_id: str) -> bool:
-    """Delete an email account by ID."""
+def delete_account(account_id: str, purge_data: bool = False, coordinator: Optional[Any] = None) -> bool:
+    """Delete an email account by ID, optionally purging all indexed data."""
+    if purge_data and coordinator is not None:
+        try:
+            coordinator.purge_account_data(account_id, source_type="EMAIL")
+        except Exception:
+            pass
     settings = load_settings()
     accounts = settings.get("accounts", [])
     orig_len = len(accounts)
@@ -181,12 +252,222 @@ def delete_account(account_id: str) -> bool:
     return False
 
 
-def get_account(account_id: str) -> Optional[Dict[str, Any]]:
+def get_account(account_id: str, decrypt: bool = False) -> Optional[Dict[str, Any]]:
     """Retrieve account configuration by ID."""
-    accounts = get_accounts()
+    accounts = get_accounts(decrypt=decrypt)
     for a in accounts:
         if a.get("id") == account_id:
             return a
+    return None
+
+
+def get_chat_accounts(decrypt: bool = False) -> List[Dict[str, Any]]:
+    """Return all configured chat accounts."""
+    settings = load_settings()
+    accounts = settings.get("chat_accounts", [])
+    if decrypt:
+        decrypted_accounts = []
+        secret_keys = ("auth_token", "password", "client_secret")
+        for acc in accounts:
+            acc_copy = json.loads(json.dumps(acc))
+            for sk in secret_keys:
+                if sk in acc_copy and isinstance(acc_copy[sk], str):
+                    acc_copy[sk] = decrypt_secret(acc_copy[sk])
+            creds = acc_copy.get("credentials", {})
+            for k, v in creds.items():
+                if isinstance(v, str):
+                    creds[k] = decrypt_secret(v)
+            acc_copy["credentials"] = creds
+            decrypted_accounts.append(acc_copy)
+        return decrypted_accounts
+    return accounts
+
+
+def save_chat_account(account: Dict[str, Any]) -> Dict[str, Any]:
+    """Add or update a chat account in settings, encrypting credentials."""
+    settings = load_settings()
+    accounts = settings.get("chat_accounts", [])
+    acc_id = account.get("id")
+    if not acc_id:
+        import uuid
+        acc_id = f"chat_{uuid.uuid4().hex[:8]}"
+        account["id"] = acc_id
+
+    stored_acc = json.loads(json.dumps(account))
+    secret_keys = ("auth_token", "password", "client_secret")
+    for sk in secret_keys:
+        if sk in stored_acc and isinstance(stored_acc[sk], str):
+            stored_acc[sk] = encrypt_secret(stored_acc[sk])
+    creds = stored_acc.get("credentials", {})
+    for k, v in creds.items():
+        if isinstance(v, str):
+            creds[k] = encrypt_secret(v)
+    stored_acc["credentials"] = creds
+
+    existing_idx = next((i for i, a in enumerate(accounts) if a.get("id") == acc_id), -1)
+    if existing_idx >= 0:
+        accounts[existing_idx] = stored_acc
+    else:
+        accounts.append(stored_acc)
+
+    settings["chat_accounts"] = accounts
+    save_settings(settings)
+    return stored_acc
+
+
+def delete_chat_account(account_id: str, purge_data: bool = False, coordinator: Optional[Any] = None) -> bool:
+    """Delete a chat account by ID, optionally purging all indexed data."""
+    if purge_data and coordinator is not None:
+        try:
+            coordinator.purge_account_data(account_id, source_type="CHAT")
+        except Exception:
+            pass
+    settings = load_settings()
+    accounts = settings.get("chat_accounts", [])
+    orig_len = len(accounts)
+    accounts = [a for a in accounts if a.get("id") != account_id]
+    if len(accounts) != orig_len:
+        settings["chat_accounts"] = accounts
+        save_settings(settings)
+        return True
+    return False
+
+
+def get_calendar_accounts(decrypt: bool = False) -> List[Dict[str, Any]]:
+    """Return all configured calendar accounts."""
+    settings = load_settings()
+    accounts = settings.get("calendar_accounts", [])
+    if not accounts and DEFAULT_SETTINGS.get("calendar_accounts"):
+        accounts = json.loads(json.dumps(DEFAULT_SETTINGS["calendar_accounts"]))
+    if decrypt:
+        decrypted_accounts = []
+        secret_keys = ("password", "client_secret", "token")
+        for acc in accounts:
+            acc_copy = json.loads(json.dumps(acc))
+            for sk in secret_keys:
+                if sk in acc_copy and isinstance(acc_copy[sk], str):
+                    acc_copy[sk] = decrypt_secret(acc_copy[sk])
+            creds = acc_copy.get("credentials", {})
+            for k, v in creds.items():
+                if isinstance(v, str):
+                    creds[k] = decrypt_secret(v)
+            acc_copy["credentials"] = creds
+            decrypted_accounts.append(acc_copy)
+        return decrypted_accounts
+    return accounts
+
+
+def save_calendar_account(account: Dict[str, Any]) -> Dict[str, Any]:
+    """Add or update a calendar account in settings, encrypting credentials."""
+    settings = load_settings()
+    accounts = settings.get("calendar_accounts", [])
+    acc_id = account.get("id")
+    if not acc_id:
+        import uuid
+        acc_id = f"cal_{uuid.uuid4().hex[:8]}"
+        account["id"] = acc_id
+
+    stored_acc = json.loads(json.dumps(account))
+    secret_keys = ("password", "client_secret", "token")
+    for sk in secret_keys:
+        if sk in stored_acc and isinstance(stored_acc[sk], str):
+            stored_acc[sk] = encrypt_secret(stored_acc[sk])
+    creds = stored_acc.get("credentials", {})
+    for k, v in creds.items():
+        if isinstance(v, str):
+            creds[k] = encrypt_secret(v)
+    stored_acc["credentials"] = creds
+
+    existing_idx = next((i for i, a in enumerate(accounts) if a.get("id") == acc_id), -1)
+    if existing_idx >= 0:
+        accounts[existing_idx] = stored_acc
+    else:
+        accounts.append(stored_acc)
+
+    settings["calendar_accounts"] = accounts
+    save_settings(settings)
+    return stored_acc
+
+
+def delete_calendar_account(account_id: str, purge_data: bool = False, coordinator: Optional[Any] = None) -> bool:
+    """Delete a calendar account by ID, optionally purging all indexed data."""
+    if purge_data and coordinator is not None:
+        try:
+            coordinator.purge_account_data(account_id, source_type="CALENDAR")
+        except Exception:
+            pass
+    settings = load_settings()
+    accounts = settings.get("calendar_accounts", [])
+    orig_len = len(accounts)
+    accounts = [a for a in accounts if a.get("id") != account_id]
+    if len(accounts) != orig_len:
+        settings["calendar_accounts"] = accounts
+        save_settings(settings)
+        return True
+    return False
+
+
+def get_calendar_account(account_id: str, decrypt: bool = False) -> Optional[Dict[str, Any]]:
+    """Retrieve calendar account configuration by ID."""
+    accounts = get_calendar_accounts(decrypt=decrypt)
+    for a in accounts:
+        if a.get("id") == account_id:
+            return a
+    return None
+
+
+def save_dashboard_layout(layout: Dict[str, Any]) -> Dict[str, Any]:
+    """Save dashboard window layout positions and settings."""
+    settings = load_settings()
+    stored_layout = layout if isinstance(layout, dict) else {"windows": []}
+    settings["dashboard_layout"] = stored_layout
+    save_settings(settings)
+    return stored_layout
+
+
+def get_dashboard_layout() -> Dict[str, Any]:
+    """Retrieve saved dashboard window layout."""
+    settings = load_settings()
+    return settings.get("dashboard_layout", {"windows": []})
+
+
+def get_quota_configs() -> Dict[str, Dict[str, Any]]:
+    """Return quota configuration per source type."""
+    settings = load_settings()
+    return settings.get("quotas", {})
+
+
+def save_quota_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Save or update quota configuration for a source type."""
+    settings = load_settings()
+    quotas = settings.get("quotas", {})
+    st = config.get("source_type")
+    if hasattr(st, "value"):
+        st_key = st.value
+    else:
+        st_key = str(st)
+    quotas[st_key] = config
+    settings["quotas"] = quotas
+    save_settings(settings)
+    return config
+
+
+def get_sync_policies() -> Dict[str, Dict[str, Any]]:
+    """Return all configured sync policies."""
+    settings = load_settings()
+    return settings.get("sync_policies", {})
+
+
+def save_sync_policy(policy: Dict[str, Any]) -> Dict[str, Any]:
+    """Save or update sync policy for a source_key."""
+    settings = load_settings()
+    policies = settings.get("sync_policies", {})
+    key = policy.get("source_key", "")
+    if key:
+        policies[key] = policy
+        settings["sync_policies"] = policies
+        save_settings(settings)
+    return policy
     return None
 
 

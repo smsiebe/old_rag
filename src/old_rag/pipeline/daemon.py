@@ -6,15 +6,29 @@ import os
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
-from old_rag.contracts import ModelConfig, StorageConfig, safe_json_dumps, safe_json_loads
+from old_rag.contracts import (
+    CalendarEvent,
+    CalendarIngestMeta,
+    ChatAccountConfig,
+    DataTypeQuotaConfig,
+    ModelConfig,
+    RawIngestPayload,
+    SourceType,
+    StorageConfig,
+    SyncPolicyConfig,
+    safe_json_dumps,
+    safe_json_loads,
+)
 from old_rag.engine.chunker import ParentAwareChunker
 from old_rag.engine.explainer import MatchExplainer
 from old_rag.engine.extractor import DocumentExtractor, build_scryer_options_from_settings
 from old_rag.engine.indexer import IndexEngine, open_lancedb_table
 from old_rag.engine.search import HybridSearchEngine
+from old_rag.ingest.chat.registry import ChatPluginRegistry
 from old_rag.ingest.outlook import ClassicMAPIConnector, is_new_outlook_active
 from old_rag.ingest.watcher import DirectoryWatcher, ingest_filesystem_path
 from old_rag.pipeline.coordinator import PipelineCoordinator
@@ -23,18 +37,24 @@ from old_rag.pipeline.lifecycle import (
     SingleInstanceMutex,
     get_scoped_pipe_name,
 )
+from old_rag.pipeline.sync_scheduler import EventBus, RealTimeSyncScheduler
 from old_rag.storage.cas import CASEngine, get_default_app_data_dir
 from old_rag.storage.catalog import CatalogRepository
+from old_rag.storage.quota import QuotaGovernor
 
 
 class DaemonProcess:
     """Core background daemon process (Process 1)."""
 
     def __init__(self, storage_cfg: Optional[StorageConfig] = None, model_cfg: Optional[ModelConfig] = None):
+        from old_rag.logger import get_logger, setup_logging
+        setup_logging()
+        self.logger = get_logger("daemon")
         self.storage_cfg = storage_cfg or StorageConfig()
         self.model_cfg = model_cfg or ModelConfig()
         self.app_data_dir = Path(self.storage_cfg.app_data_dir) if self.storage_cfg.app_data_dir else get_default_app_data_dir()
         self.app_data_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info("Initializing DaemonProcess at %s", self.app_data_dir)
 
         self.mutex = SingleInstanceMutex()
         self.cas = CASEngine(self.storage_cfg)
@@ -68,6 +88,21 @@ class DaemonProcess:
         )
         self.explainer = MatchExplainer()
 
+        self.chat_registry = ChatPluginRegistry()
+        self.quota_governor = QuotaGovernor(
+            catalog=self.catalog,
+            cas=self.cas,
+            indexer=self.indexer,
+            coordinator=self.coordinator,
+        )
+        self.sync_scheduler = RealTimeSyncScheduler(
+            coordinator=self.coordinator,
+            catalog=self.catalog,
+            quota_governor=self.quota_governor,
+            chat_registry=self.chat_registry,
+        )
+        self.event_bus = self.sync_scheduler.event_bus
+
         self.pipe_server = NamedPipeServer(get_scoped_pipe_name(), self.handle_client_request)
         self._running = False
         self.watcher: Optional[DirectoryWatcher] = None
@@ -89,7 +124,7 @@ class DaemonProcess:
         try:
             req = safe_json_loads(raw_req)
             action = req.get("action")
-            if action == "status":
+            if action in ("status", "get_status"):
                 lance_count = 0
                 if self.lancedb_table:
                     try:
@@ -104,6 +139,7 @@ class DaemonProcess:
                     "classic_outlook_active": not is_new_outlook_active(),
                     "on_battery": self.is_on_battery(),
                     "lancedb_count": lance_count,
+                    "sync_progress_pct": 100.0,
                 }
                 return safe_json_dumps(res)
             elif action in ("search", "query_personal_archive"):
@@ -295,8 +331,37 @@ class DaemonProcess:
                 return safe_json_dumps({"success": True, "account": acc})
             elif action == "delete_account":
                 from old_rag.storage.settings import delete_account
-                ok = delete_account(req.get("account_id", ""))
+                acc_id = req.get("account_id", "")
+                purge_data = bool(req.get("purge_data", False))
+                coord = self.coordinator if purge_data else None
+                ok = delete_account(acc_id, purge_data=purge_data, coordinator=coord)
                 return safe_json_dumps({"success": ok})
+            elif action == "purge_account_data":
+                acc_id = req.get("account_id", "")
+                source_type = req.get("source_type")
+                res = self.coordinator.purge_account_data(acc_id, source_type=source_type)
+                return safe_json_dumps(res)
+            elif action == "list_calendar_accounts":
+                from old_rag.storage.settings import get_calendar_accounts
+                return safe_json_dumps({"accounts": get_calendar_accounts()})
+            elif action == "save_calendar_account":
+                from old_rag.storage.settings import save_calendar_account
+                acc = save_calendar_account(req.get("account", {}))
+                return safe_json_dumps({"success": True, "account": acc})
+            elif action == "delete_calendar_account":
+                from old_rag.storage.settings import delete_calendar_account
+                acc_id = req.get("account_id", "")
+                purge_data = bool(req.get("purge_data", False))
+                coord = self.coordinator if purge_data else None
+                ok = delete_calendar_account(acc_id, purge_data=purge_data, coordinator=coord)
+                return safe_json_dumps({"success": ok})
+            elif action == "save_dashboard_layout":
+                from old_rag.storage.settings import save_dashboard_layout
+                layout = req.get("layout", {})
+                return safe_json_dumps({"success": True, "layout": save_dashboard_layout(layout)})
+            elif action == "get_dashboard_layout":
+                from old_rag.storage.settings import get_dashboard_layout
+                return safe_json_dumps({"layout": get_dashboard_layout()})
             elif action == "list_mailbox_folders":
                 acc_id = req.get("account_id", "")
                 from old_rag.storage.settings import get_account
@@ -311,7 +376,7 @@ class DaemonProcess:
                     if t.get("folders"):
                         folders = t["folders"]
                 return safe_json_dumps({"folders": folders})
-            elif action == "list_messages":
+            elif action in ("list_messages", "list_mail"):
                 account_id = req.get("account_id")
                 folder = req.get("folder")
                 limit = int(req.get("limit", 50))
@@ -333,7 +398,7 @@ class DaemonProcess:
                 cur = conn.execute(q, params)
                 rows = [dict(r) for r in cur.fetchall()]
                 return safe_json_dumps({"messages": rows})
-            elif action == "get_message_detail":
+            elif action in ("get_message_detail", "get_mail_detail"):
                 doc_id = req.get("doc_id", "")
                 norm_doc = self.cas.get_text(doc_id)
                 if not norm_doc:
@@ -341,7 +406,7 @@ class DaemonProcess:
                 doc_dict = norm_doc.model_dump(mode="json")
                 doc_dict["has_archived_msg"] = self.cas.has_msg(doc_id)
                 return safe_json_dumps({"message": doc_dict})
-            elif action == "send_email":
+            elif action in ("send_email", "send_mail"):
                 acc_id = req.get("account_id", "")
                 from old_rag.storage.settings import get_account
                 acc = get_account(acc_id) if acc_id else None
@@ -487,6 +552,141 @@ class DaemonProcess:
                     force_refresh=bool(req.get("force_refresh", False)),
                 )
                 return safe_json_dumps(res)
+            elif action == "import_ics":
+                from old_rag.ingest.calendar import CalendarManager, event_to_ingest_payload, parse_ics_content
+                ics_text = req.get("ics_content", "")
+                cm = CalendarManager(self.app_data_dir / "catalog.db")
+                events = parse_ics_content(ics_text)
+                for evt in events:
+                    cm.upsert_event(evt)
+                    p = event_to_ingest_payload(evt)
+                    self.coordinator.ingest_payload(p)
+                return safe_json_dumps({"success": True, "count": len(events)})
+            elif action == "export_ics":
+                from old_rag.ingest.calendar import CalendarManager, export_events_to_ics
+                cm = CalendarManager(self.app_data_dir / "catalog.db")
+                event_ids = req.get("event_ids")
+                events = cm.list_events()
+                if event_ids:
+                    events = [e for e in events if e.event_id in event_ids]
+                ics_text = export_events_to_ics(events)
+                return safe_json_dumps({"success": True, "ics_content": ics_text})
+            elif action == "record_access":
+                doc_id = req.get("doc_id")
+                if doc_id:
+                    self.catalog.record_document_access(doc_id)
+                    return safe_json_dumps({"success": True, "doc_id": doc_id})
+                return safe_json_dumps({"error": "doc_id required"})
+            elif action == "list_chat_plugins":
+                plugins = self.chat_registry.list_plugins()
+                return safe_json_dumps({"plugins": [p.model_dump(mode="json") for p in plugins]})
+            elif action == "list_chat_accounts":
+                from old_rag.storage.settings import get_chat_accounts
+                accounts = get_chat_accounts(decrypt=False)
+                return safe_json_dumps({"accounts": accounts})
+            elif action == "save_chat_account":
+                from old_rag.storage.settings import save_chat_account
+                acc = save_chat_account(req.get("account", {}))
+                return safe_json_dumps({"success": True, "account": acc})
+            elif action == "delete_chat_account":
+                from old_rag.storage.settings import delete_chat_account
+                acc_id = req.get("account_id", "")
+                purge_data = bool(req.get("purge_data", False))
+                coord = self.coordinator if purge_data else None
+                ok = delete_chat_account(acc_id, purge_data=purge_data, coordinator=coord)
+                return safe_json_dumps({"success": ok})
+            elif action == "test_chat_connection":
+                acc_dict = req.get("account", {})
+                acc_cfg = ChatAccountConfig.model_validate(acc_dict)
+                adapter = self.chat_registry.create_adapter(acc_cfg)
+                ok = adapter.test_connection()
+                return safe_json_dumps({"success": ok})
+            elif action == "list_chat_rooms":
+                account_id = req.get("account_id")
+                rooms = self.catalog.list_chat_rooms(account_id=account_id)
+                return safe_json_dumps({"rooms": [r.model_dump(mode="json") for r in rooms]})
+            elif action == "update_room_subscription":
+                room_id = req.get("room_id")
+                subscribed = bool(req.get("subscribed", True))
+                conn = self.catalog._get_connection()
+                conn.execute("UPDATE chat_rooms SET subscribed = ? WHERE room_id = ?", (1 if subscribed else 0, room_id))
+                conn.commit()
+                return safe_json_dumps({"success": True, "room_id": room_id, "subscribed": subscribed})
+            elif action == "list_chat_messages":
+                room_id = req.get("room_id")
+                limit = int(req.get("limit", 50))
+                since_utc = req.get("since_utc")
+                since_dt = datetime.fromisoformat(since_utc) if since_utc else None
+                msgs = self.catalog.list_chat_messages(room_id=room_id, since_utc=since_dt, limit=limit)
+                return safe_json_dumps({"messages": [m.model_dump(mode="json") for m in msgs]})
+            elif action == "send_chat_message":
+                account_id = req.get("account_id", "")
+                room_id = req.get("room_id", "")
+                body_text = req.get("body_text", "")
+                thread_root_id = req.get("thread_root_id")
+                from old_rag.storage.settings import get_chat_accounts
+                accounts = get_chat_accounts(decrypt=True)
+                target_acc = next((a for a in accounts if a.get("id") == account_id), None)
+                if not target_acc:
+                    return safe_json_dumps({"success": False, "error": f"Chat account {account_id} not found"})
+                acc_cfg = ChatAccountConfig.model_validate(target_acc)
+                adapter = self.chat_registry.create_adapter(acc_cfg)
+                msg_item = adapter.send_message(room_id=room_id, body_text=body_text, thread_root_id=thread_root_id)
+                self.catalog.upsert_chat_messages([msg_item])
+                return safe_json_dumps({"success": True, "message": msg_item.model_dump(mode="json")})
+            elif action == "get_sync_status":
+                cursors = self.catalog.get_sync_cursors()
+                return safe_json_dumps({
+                    "daemon_running": self._running,
+                    "cursors": [c.model_dump(mode="json") for c in cursors],
+                    "last_sync_utc": datetime.now(timezone.utc).isoformat(),
+                })
+            elif action == "trigger_sync":
+                st_val = req.get("source_type")
+                st = SourceType(st_val) if st_val else None
+                sk = req.get("source_key")
+                res = self.sync_scheduler.trigger_sync(source_type=st, source_key=sk)
+                return safe_json_dumps({"success": True, **res})
+            elif action == "update_sync_policy":
+                from old_rag.storage.settings import save_sync_policy
+                pol_dict = req.get("policy", {})
+                pol = SyncPolicyConfig.model_validate(pol_dict)
+                save_sync_policy(pol)
+                return safe_json_dumps({"success": True, "policy": pol.model_dump(mode="json")})
+            elif action == "get_quota_status":
+                st_val = req.get("source_type")
+                if st_val:
+                    st = SourceType(st_val)
+                    status = self.quota_governor.get_status(st)
+                    return safe_json_dumps(status.model_dump(mode="json"))
+                else:
+                    statuses = [self.quota_governor.get_status(st).model_dump(mode="json") for st in SourceType]
+                    return safe_json_dumps({"statuses": statuses})
+            elif action == "update_quota_policy":
+                from old_rag.storage.settings import save_quota_config
+                cfg_dict = req.get("config", {})
+                cfg = DataTypeQuotaConfig.model_validate(cfg_dict)
+                save_quota_config(cfg)
+                return safe_json_dumps({"success": True, "config": cfg.model_dump(mode="json")})
+            elif action == "preview_quota_eviction":
+                st_val = req.get("source_type")
+                st = SourceType(st_val)
+                res = self.quota_governor.enforce_quota(st, dry_run=True)
+                return safe_json_dumps(res.model_dump(mode="json"))
+            elif action == "run_quota_purge":
+                st_val = req.get("source_type")
+                dry_run = bool(req.get("dry_run", False))
+                st = SourceType(st_val)
+                res = self.quota_governor.enforce_quota(st, dry_run=dry_run)
+                return safe_json_dumps(res.model_dump(mode="json"))
+            elif action == "poll_events":
+                since_seq = int(req.get("since_seq", 0))
+                events = self.event_bus.get_events_since(since_seq)
+                latest_seq = events[-1].seq if events else since_seq
+                return safe_json_dumps({
+                    "events": [e.model_dump(mode="json") for e in events],
+                    "latest_seq": latest_seq,
+                })
             return safe_json_dumps({"error": f"Unknown action {action}"})
         except Exception as e:
             return safe_json_dumps({"error": str(e)})
@@ -520,7 +720,13 @@ class DaemonProcess:
         except Exception:
             pass
 
-        # 4. Start Named Pipe IPC Server
+        # 4. Start RealTimeSyncScheduler
+        try:
+            self.sync_scheduler.start()
+        except Exception:
+            pass
+
+        # 5. Start Named Pipe IPC Server
         self.pipe_server.start()
         print(f"OldRAG Daemon running. IPC Pipe: {get_scoped_pipe_name()}")
 
@@ -532,6 +738,10 @@ class DaemonProcess:
 
     def stop(self) -> None:
         self._running = False
+        try:
+            self.sync_scheduler.stop()
+        except Exception:
+            pass
         if self.watcher is not None:
             try:
                 self.watcher.stop()

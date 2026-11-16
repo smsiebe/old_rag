@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import FastMCP
 
@@ -73,6 +74,28 @@ def _dispatch_ipc(payload: Dict[str, Any]) -> Dict[str, Any]:
             return {"success": True, "temp_view_path": str(temp_path)}
         return {"success": False, "error": "Not found in CAS"}
 
+    elif action == "list_chat_rooms":
+        cat = CatalogRepository(app_data_dir / "catalog.db")
+        rooms = cat.list_chat_rooms(account_id=payload.get("account_id"))
+        return {"rooms": [r.model_dump(mode="json") for r in rooms]}
+
+    elif action == "list_chat_messages":
+        cat = CatalogRepository(app_data_dir / "catalog.db")
+        since_str = payload.get("since_utc")
+        since_dt = datetime.fromisoformat(since_str) if since_str else None
+        msgs = cat.list_chat_messages(
+            room_id=payload.get("room_id", ""),
+            since_utc=since_dt,
+            limit=int(payload.get("limit", 50)),
+        )
+        return {"messages": [m.model_dump(mode="json") for m in msgs]}
+
+    elif action == "list_calendar_events":
+        from old_rag.ingest.calendar import CalendarManager
+        cm = CalendarManager(app_data_dir / "catalog.db")
+        events = cm.list_events()
+        return {"events": [e.model_dump(mode="json") for e in events[:int(payload.get("limit", 50))]]}
+
     return {"error": f"Unknown action {action}"}
 
 
@@ -82,14 +105,16 @@ def query_personal_archive(
     top_k: int = 10,
     folder: Optional[str] = None,
     sender: Optional[str] = None,
+    source_types: Optional[List[str]] = None,
 ) -> str:
-    """Search personal email and document archive using escaped FTS5 Porter/Trigram and vector search.
+    """Search personal email, file, chat, and calendar archive using hybrid FTS5 Porter/Trigram and vector search.
     
     Args:
         query: Search keywords, question, or serial number / identifier (e.g. SN-4471-AB).
         top_k: Maximum number of results to return (default 10).
         folder: Optional Outlook folder filter (e.g. Inbox, Sent).
         sender: Optional sender email or display name filter.
+        source_types: Optional list of source types to filter (e.g. ["EMAIL", "FILE", "CALENDAR", "CHAT"]).
     """
     req = {
         "action": "search",
@@ -98,8 +123,51 @@ def query_personal_archive(
             "top_k": top_k,
             "folder": folder,
             "sender": sender,
+            "source_types": source_types,
         },
     }
+    resp = _dispatch_ipc(req)
+    return safe_json_dumps(resp, indent=2)
+
+
+@mcp.tool()
+def list_chat_rooms(account_id: Optional[str] = None) -> str:
+    """List chat channels, rooms, and direct message threads across registered chat connectors.
+    
+    Args:
+        account_id: Optional chat account ID filter.
+    """
+    req = {"action": "list_chat_rooms", "account_id": account_id}
+    resp = _dispatch_ipc(req)
+    return safe_json_dumps(resp, indent=2)
+
+
+@mcp.tool()
+def list_chat_messages(
+    room_id: str,
+    limit: int = 50,
+    since_utc: Optional[str] = None,
+) -> str:
+    """Retrieve chronological messages from a chat room or DM thread.
+    
+    Args:
+        room_id: Identifier of the room or channel.
+        limit: Maximum number of messages to return (default 50).
+        since_utc: Optional ISO 8601 UTC timestamp filter.
+    """
+    req = {"action": "list_chat_messages", "room_id": room_id, "limit": limit, "since_utc": since_utc}
+    resp = _dispatch_ipc(req)
+    return safe_json_dumps(resp, indent=2)
+
+
+@mcp.tool()
+def list_calendar_events(limit: int = 50) -> str:
+    """List upcoming and past calendar meetings, events, and appointments from local calendar store.
+    
+    Args:
+        limit: Maximum number of events to return (default 50).
+    """
+    req = {"action": "list_calendar_events", "limit": limit}
     resp = _dispatch_ipc(req)
     return safe_json_dumps(resp, indent=2)
 

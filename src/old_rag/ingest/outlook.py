@@ -145,6 +145,7 @@ class ClassicMAPIConnector:
         folder_names: Optional[List[str]] = None,
         as_of_date_utc: Optional[datetime] = None,
         batch_size: int = 25,
+        limit: Optional[int] = None,
     ) -> Generator[RawIngestPayload, None, None]:
         """Poll Classic Outlook inside dedicated STA thread."""
         self.check_availability()
@@ -164,18 +165,60 @@ class ClassicMAPIConnector:
 
             ns = outlook.GetNamespace("MAPI")
             folders_to_poll = []
-            if not folder_names:
+            if not folder_names or "ALL" in folder_names:
                 # Default: Inbox (6) and Sent Mail (5)
-                folders_to_poll.append((ns.GetDefaultFolder(6), False))
-                folders_to_poll.append((ns.GetDefaultFolder(5), True))
+                try:
+                    folders_to_poll.append((ns.GetDefaultFolder(6), False))
+                except Exception:
+                    pass
+                try:
+                    folders_to_poll.append((ns.GetDefaultFolder(5), True))
+                except Exception:
+                    pass
+            else:
+                for target in folder_names:
+                    t_clean = target.strip().lower()
+                    if t_clean in ("inbox", "all"):
+                        try:
+                            folders_to_poll.append((ns.GetDefaultFolder(6), False))
+                        except Exception:
+                            pass
+                    elif t_clean in ("sent", "sent items", "sent mail"):
+                        try:
+                            folders_to_poll.append((ns.GetDefaultFolder(5), True))
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            for store in ns.Folders:
+                                store_name = getattr(store, "Name", "")
+                                for folder in getattr(store, "Folders", []):
+                                    fname = getattr(folder, "Name", "")
+                                    if fname.lower() == t_clean or f"{store_name} / {fname}".lower() == t_clean:
+                                        is_sent = "sent" in fname.lower()
+                                        folders_to_poll.append((folder, is_sent))
+                        except Exception:
+                            pass
 
             for folder, is_sent in folders_to_poll:
                 items = folder.Items
+                try:
+                    sort_field = "[SentOn]" if is_sent else "[ReceivedTime]"
+                    items.Sort(sort_field, True)
+                except Exception:
+                    pass
                 dasl = self.format_dasl_query(as_of_date_utc, is_sent_folder=is_sent)
                 filtered_items = items.Restrict(dasl) if dasl else items
+                try:
+                    sort_field = "[SentOn]" if is_sent else "[ReceivedTime]"
+                    filtered_items.Sort(sort_field, True)
+                except Exception:
+                    pass
 
                 count = 0
                 for item in filtered_items:
+                    if limit and count >= limit:
+                        break
                     # Class 43 = olMail
                     if getattr(item, "Class", None) != self.OL_MAIL_CLASS:
                         continue

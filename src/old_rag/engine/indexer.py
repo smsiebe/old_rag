@@ -84,8 +84,16 @@ class IndexEngine(IndexerProtocol):
         self._embedder = None
         self._init_fts()
 
+    def _connect_fts(self) -> sqlite3.Connection:
+        """Create a resilient SQLite WAL connection to lexical_fts.db with busy timeout."""
+        conn = sqlite3.connect(str(self.fts_db_path), timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+        return conn
+
     def _init_fts(self) -> None:
-        conn = sqlite3.connect(str(self.fts_db_path))
+        conn = self._connect_fts()
         try:
             conn.executescript(FTS_SCHEMA_DDL)
             conn.commit()
@@ -121,7 +129,7 @@ class IndexEngine(IndexerProtocol):
         if embeddings is None:
             embeddings = self.embed_chunks(chunks)
 
-        conn = sqlite3.connect(str(self.fts_db_path))
+        conn = self._connect_fts()
         try:
             with conn:
                 for chunk in chunks:
@@ -181,7 +189,7 @@ class IndexEngine(IndexerProtocol):
     def delete_chunks(self, chunk_ids: List[str]) -> None:
         if not chunk_ids:
             return
-        conn = sqlite3.connect(str(self.fts_db_path))
+        conn = self._connect_fts()
         try:
             with conn:
                 for cid in chunk_ids:
@@ -198,8 +206,52 @@ class IndexEngine(IndexerProtocol):
                 except Exception:
                     pass
 
+    def delete_document_chunks(self, doc_id: str, chunk_ids: Optional[List[str]] = None) -> None:
+        """Delete all chunks belonging to doc_id from Porter, Trigram, and LanceDB."""
+        conn = self._connect_fts()
+        try:
+            with conn:
+                if chunk_ids:
+                    for cid in chunk_ids:
+                        rowid = derive_fts_rowid(cid)
+                        conn.execute("DELETE FROM chunks_fts_porter WHERE rowid = ?", (rowid,))
+                        conn.execute("DELETE FROM chunks_fts_trigram WHERE rowid = ?", (rowid,))
+                conn.execute("DELETE FROM chunks_fts_porter WHERE doc_id = ?", (doc_id,))
+                conn.execute("DELETE FROM chunks_fts_trigram WHERE doc_id = ?", (doc_id,))
+        finally:
+            conn.close()
+
+        if self.lancedb_table is not None:
+            try:
+                self.lancedb_table.delete(f"doc_id = '{doc_id}'")
+            except Exception:
+                pass
+
+    def compact_stores(self) -> None:
+        """Optimize FTS5 indexes, checkpoint WAL, and compact LanceDB vector files."""
+        conn = self._connect_fts()
+        try:
+            with conn:
+                conn.execute("INSERT INTO chunks_fts_porter(chunks_fts_porter) VALUES('optimize');")
+                conn.execute("INSERT INTO chunks_fts_trigram(chunks_fts_trigram) VALUES('optimize');")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        finally:
+            conn.close()
+
+        if self.lancedb_table is not None:
+            try:
+                if hasattr(self.lancedb_table, "compact_files"):
+                    self.lancedb_table.compact_files()
+            except Exception:
+                pass
+            try:
+                if hasattr(self.lancedb_table, "cleanup_old_versions"):
+                    self.lancedb_table.cleanup_old_versions()
+            except Exception:
+                pass
+
     def update_folder(self, doc_id: str, new_folder: str) -> None:
-        conn = sqlite3.connect(str(self.fts_db_path))
+        conn = self._connect_fts()
         try:
             with conn:
                 conn.execute(

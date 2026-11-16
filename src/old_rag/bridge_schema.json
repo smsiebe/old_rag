@@ -13,7 +13,9 @@
         "folder": { "type": ["string", "null"] },
         "sender": { "type": ["string", "null"] },
         "as_of_date_utc": { "type": ["string", "null"] },
-        "source_type": { "type": ["string", "null"], "enum": ["EMAIL", "FILE", null] }
+        "source_type": { "type": ["string", "null"], "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT", null] },
+        "source_types": { "type": ["array", "null"], "items": { "type": "string", "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT"] } },
+        "account_id": { "type": ["string", "null"] }
       }
     },
     "SearchResultItem": {
@@ -23,7 +25,7 @@
         "chunk_id": { "type": "string" },
         "doc_id": { "type": "string" },
         "content": { "type": "string" },
-        "source_type": { "type": "string", "enum": ["EMAIL", "FILE"] },
+        "source_type": { "type": "string", "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT"] },
         "subject": { "type": ["string", "null"] },
         "sender": { "type": ["string", "null"] },
         "folder": { "type": ["string", "null"] },
@@ -126,13 +128,17 @@
       "required": ["event_id", "subject", "start_ts_utc", "end_ts_utc"],
       "properties": {
         "event_id": { "type": "string" },
+        "account_id": { "type": ["string", "null"] },
+        "doc_id": { "type": ["string", "null"] },
         "subject": { "type": "string" },
         "location": { "type": ["string", "null"] },
         "start_ts_utc": { "type": "string" },
         "end_ts_utc": { "type": "string" },
         "is_all_day": { "type": "boolean" },
         "organizer": { "type": ["string", "null"] },
-        "body_text": { "type": "string" }
+        "attendees": { "type": "array", "items": { "type": "string" } },
+        "body_text": { "type": "string" },
+        "status": { "type": "string" }
       }
     },
     "GetRelatedContextRequest": {
@@ -152,6 +158,7 @@
         "related_files": { "type": "array" },
         "related_emails": { "type": "array" },
         "related_calendar": { "type": "array" },
+        "related_chats": { "type": "array" },
         "query_used": { "type": "string" },
         "error": { "type": ["string", "null"] }
       }
@@ -232,6 +239,259 @@
         "error_code": { "type": ["string", "null"] },
         "error": { "type": ["string", "null"] }
       }
+    },
+    "BridgeResponseEnvelope": {
+      "type": "object",
+      "required": ["ok", "status"],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "status": { "type": "integer" },
+        "data": {},
+        "error": { "type": ["string", "null"] },
+        "error_code": { "type": "string" }
+      }
+    },
+    "ChatAdapterCapability": {
+      "type": "object",
+      "properties": {
+        "supports_dms": { "type": "boolean" },
+        "supports_rooms": { "type": "boolean" },
+        "supports_threads": { "type": "boolean" },
+        "supports_streaming": { "type": "boolean" },
+        "supports_send": { "type": "boolean" }
+      }
+    },
+    "ChatPluginDescriptor": {
+      "type": "object",
+      "required": ["adapter_type", "display_name"],
+      "properties": {
+        "adapter_type": { "type": "string" },
+        "display_name": { "type": "string" },
+        "version": { "type": "string" },
+        "capabilities": { "$ref": "#/definitions/ChatAdapterCapability" },
+        "config_schema": { "type": "object" },
+        "is_builtin": { "type": "boolean" }
+      }
+    },
+    "ChatAccountItem": {
+      "type": "object",
+      "required": ["id", "name", "adapter_type", "enabled"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "adapter_type": { "type": "string" },
+        "server_url": { "type": "string" },
+        "username": { "type": "string" },
+        "credentials": { "type": "object" },
+        "lookback_days": { "type": ["integer", "null"] },
+        "include_dms": { "type": "boolean" },
+        "rooms": { "type": "array", "items": { "type": "string" } },
+        "poll_interval_sec": { "type": "number" },
+        "realtime_enabled": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "created_at_utc": { "type": ["string", "null"] }
+      }
+    },
+    "ChatRoomSummary": {
+      "type": "object",
+      "required": ["room_id", "account_id", "adapter_type", "room_name", "is_dm"],
+      "properties": {
+        "room_id": { "type": "string" },
+        "account_id": { "type": "string" },
+        "adapter_type": { "type": "string" },
+        "room_name": { "type": "string" },
+        "is_dm": { "type": "boolean" },
+        "participant_count": { "type": "integer" },
+        "unread_count": { "type": "integer" },
+        "last_message_ts_utc": { "type": ["string", "null"] },
+        "last_snippet": { "type": "string" },
+        "subscribed": { "type": "boolean" }
+      }
+    },
+    "ChatMessageItem": {
+      "type": "object",
+      "required": ["message_id", "doc_id", "account_id", "adapter_type", "room_id", "room_name", "is_dm", "sender_id", "sender_name", "sent_ts_utc", "body_text"],
+      "properties": {
+        "message_id": { "type": "string" },
+        "doc_id": { "type": "string" },
+        "account_id": { "type": "string" },
+        "adapter_type": { "type": "string" },
+        "room_id": { "type": "string" },
+        "room_name": { "type": "string" },
+        "is_dm": { "type": "boolean" },
+        "sender_id": { "type": "string" },
+        "sender_name": { "type": "string" },
+        "thread_root_id": { "type": ["string", "null"] },
+        "sent_ts_utc": { "type": "string" },
+        "body_text": { "type": "string" },
+        "reactions": { "type": "object" },
+        "attachments": { "type": "array" }
+      }
+    },
+    "SendChatMessageRequest": {
+      "type": "object",
+      "required": ["account_id", "room_id", "body_text"],
+      "properties": {
+        "account_id": { "type": "string" },
+        "room_id": { "type": "string" },
+        "body_text": { "type": "string" },
+        "thread_root_id": { "type": ["string", "null"] },
+        "attachments": { "type": "array" }
+      }
+    },
+    "SyncStatusResponse": {
+      "type": "object",
+      "required": ["cursors"],
+      "properties": {
+        "cursors": { "type": "array" },
+        "daemon_running": { "type": "boolean" },
+        "last_sync_utc": { "type": ["string", "null"] }
+      }
+    },
+    "TriggerSyncRequest": {
+      "type": "object",
+      "properties": {
+        "source_type": { "type": ["string", "null"] },
+        "source_key": { "type": ["string", "null"] },
+        "account_id": { "type": ["string", "null"] }
+      }
+    },
+    "DataTypeQuotaConfig": {
+      "type": "object",
+      "required": ["source_type"],
+      "properties": {
+        "source_type": { "type": "string", "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT"] },
+        "max_bytes": { "type": "integer" },
+        "soft_warning_ratio": { "type": "number" },
+        "policy": { "type": "string", "enum": ["OLDEST_FIRST", "LRU_ACCESS", "LOWEST_CENTRALITY", "COMPOSITE_SCORE"] },
+        "preserve_starred": { "type": "boolean" },
+        "preserve_pinned": { "type": "boolean" },
+        "preserve_recent_days": { "type": "integer" }
+      }
+    },
+    "DataTypeQuotaStatus": {
+      "type": "object",
+      "required": ["source_type", "used_bytes", "max_bytes", "usage_ratio", "document_count", "chunk_count", "policy", "over_soft_limit", "over_hard_limit"],
+      "properties": {
+        "source_type": { "type": "string", "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT"] },
+        "used_bytes": { "type": "integer" },
+        "max_bytes": { "type": "integer" },
+        "usage_ratio": { "type": "number" },
+        "document_count": { "type": "integer" },
+        "chunk_count": { "type": "integer" },
+        "shared_blob_bytes": { "type": "integer" },
+        "exclusive_blob_bytes": { "type": "integer" },
+        "policy": { "type": "string" },
+        "over_soft_limit": { "type": "boolean" },
+        "over_hard_limit": { "type": "boolean" }
+      }
+    },
+    "QuotaPurgeRequest": {
+      "type": "object",
+      "required": ["source_type"],
+      "properties": {
+        "source_type": { "type": "string", "enum": ["EMAIL", "FILE", "CALENDAR", "CHAT"] },
+        "dry_run": { "type": "boolean", "default": false }
+      }
+    },
+    "QuotaPurgeResult": {
+      "type": "object",
+      "required": ["source_type", "dry_run", "evicted_doc_ids", "freed_bytes", "used_bytes_before", "used_bytes_after"],
+      "properties": {
+        "source_type": { "type": "string" },
+        "dry_run": { "type": "boolean" },
+        "evicted_doc_ids": { "type": "array", "items": { "type": "string" } },
+        "freed_bytes": { "type": "integer" },
+        "used_bytes_before": { "type": "integer" },
+        "used_bytes_after": { "type": "integer" },
+        "candidates": { "type": "array" }
+      }
+    },
+    "PollEventsResponse": {
+      "type": "object",
+      "required": ["events"],
+      "properties": {
+        "events": { "type": "array" },
+        "latest_seq": { "type": "integer" }
+      }
+    },
+    "CalendarAccountItem": {
+      "type": "object",
+      "required": ["id", "name", "connector_type"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "connector_type": { "type": "string", "enum": ["outlook_mapi", "google_calendar", "exchange", "confluence", "caldav_ics"] },
+        "color": { "type": "string" },
+        "url": { "type": ["string", "null"] },
+        "username": { "type": ["string", "null"] },
+        "enabled": { "type": "boolean" },
+        "sync_interval_mins": { "type": "integer" }
+      }
+    },
+    "PurgeAccountRequest": {
+      "type": "object",
+      "required": ["account_id"],
+      "properties": {
+        "account_id": { "type": "string" },
+        "source_type": { "type": ["string", "null"] }
+      }
+    },
+    "DashboardLayoutDTO": {
+      "type": "object",
+      "properties": {
+        "windows": { "type": "array" }
+      }
     }
+  },
+  "actions": {
+    "search": { "request": "#/definitions/SearchRequest", "response": "#/definitions/SearchResultItem" },
+    "get_status": { "request": null, "response": "#/definitions/StatusResponse" },
+    "open_cached_msg": { "request": "#/definitions/OpenCachedMsgRequest", "response": "#/definitions/OpenCachedMsgResponse" },
+    "get_admin_overview": { "request": null, "response": "#/definitions/AdminOverviewResponse" },
+    "get_statistics": { "request": null, "response": "#/definitions/StatisticsResponse" },
+    "list_accounts": { "request": null, "response": "#/definitions/EmailAccountItem" },
+    "save_account": { "request": "#/definitions/EmailAccountItem", "response": null },
+    "delete_account": { "request": null, "response": null },
+    "purge_account_data": { "request": "#/definitions/PurgeAccountRequest", "response": null },
+    "list_calendar_accounts": { "request": null, "response": null },
+    "save_calendar_account": { "request": "#/definitions/CalendarAccountItem", "response": null },
+    "delete_calendar_account": { "request": null, "response": null },
+    "save_dashboard_layout": { "request": "#/definitions/DashboardLayoutDTO", "response": null },
+    "get_dashboard_layout": { "request": null, "response": "#/definitions/DashboardLayoutDTO" },
+    "send_mail": { "request": "#/definitions/SendEmailRequest", "response": null },
+    "list_mailbox_folders": { "request": null, "response": null },
+    "list_mail": { "request": null, "response": null },
+    "get_mail_detail": { "request": null, "response": null },
+    "list_calendar_events": { "request": null, "response": "#/definitions/CalendarEventItem" },
+    "create_calendar_event": { "request": "#/definitions/CalendarEventItem", "response": null },
+    "import_ics": { "request": null, "response": null },
+    "export_ics": { "request": null, "response": null },
+    "get_related_context": { "request": "#/definitions/GetRelatedContextRequest", "response": "#/definitions/GetRelatedContextResponse" },
+    "open_document": { "request": "#/definitions/OpenDocumentRequest", "response": "#/definitions/OpenDocumentResponse" },
+    "record_access": { "request": null, "response": null },
+    "explain_match_tier1": { "request": "#/definitions/ExplainMatchTier1Request", "response": "#/definitions/ExplainMatchTier1Response" },
+    "explain_match_tier2": { "request": "#/definitions/ExplainMatchTier2Request", "response": "#/definitions/ExplainMatchTier2Response" },
+    "list_chat_plugins": { "request": null, "response": "#/definitions/ChatPluginDescriptor" },
+    "list_chat_accounts": { "request": null, "response": "#/definitions/ChatAccountItem" },
+    "save_chat_account": { "request": "#/definitions/ChatAccountItem", "response": null },
+    "delete_chat_account": { "request": null, "response": null },
+    "test_chat_connection": { "request": null, "response": null },
+    "list_chat_rooms": { "request": null, "response": "#/definitions/ChatRoomSummary" },
+    "update_room_subscription": { "request": null, "response": null },
+    "list_chat_messages": { "request": null, "response": "#/definitions/ChatMessageItem" },
+    "send_chat_message": { "request": "#/definitions/SendChatMessageRequest", "response": null },
+    "get_sync_status": { "request": null, "response": "#/definitions/SyncStatusResponse" },
+    "update_sync_policy": { "request": null, "response": null },
+    "trigger_sync": { "request": "#/definitions/TriggerSyncRequest", "response": null },
+    "get_quota_status": { "request": null, "response": "#/definitions/DataTypeQuotaStatus" },
+    "update_quota_policy": { "request": "#/definitions/DataTypeQuotaConfig", "response": null },
+    "preview_quota_eviction": { "request": "#/definitions/QuotaPurgeRequest", "response": "#/definitions/QuotaPurgeResult" },
+    "run_quota_purge": { "request": "#/definitions/QuotaPurgeRequest", "response": "#/definitions/QuotaPurgeResult" },
+    "get_settings": { "request": null, "response": null },
+    "save_settings": { "request": null, "response": null },
+    "scan_head_of_folder": { "request": null, "response": null },
+    "get_head_of_folder_status": { "request": null, "response": null },
+    "poll_events": { "request": null, "response": "#/definitions/PollEventsResponse" }
   }
 }

@@ -9,7 +9,7 @@ import os
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
@@ -80,6 +80,11 @@ def parse_eml_file(file_path: Path) -> RawIngestPayload:
         elif content_type == "text/html" and not body_html:
             body_html = part.get_content()
 
+    try:
+        rec_ts = datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc)
+    except Exception:
+        rec_ts = datetime.now(timezone.utc)
+
     return RawIngestPayload(
         source_type=SourceType.FILE,
         doc_id=doc_id,
@@ -88,7 +93,7 @@ def parse_eml_file(file_path: Path) -> RawIngestPayload:
         sender=sender,
         subject=subject,
         folder=file_path.parent.name,
-        received_ts_utc=datetime.now(timezone.utc),
+        received_ts_utc=rec_ts,
         body_text=body_text,
         body_html=body_html,
         attachments=attachments,
@@ -103,11 +108,13 @@ class CoalescingFileHandler(FileSystemEventHandler):
         on_payload: Callable[[RawIngestPayload], None],
         on_deleted: Optional[Callable[[str], None]] = None,
         debounce_seconds: float = 1.0,
+        lookback_days: Optional[int] = None,
     ):
         super().__init__()
         self.on_payload = on_payload
         self.on_deleted = on_deleted
         self.debounce_seconds = debounce_seconds
+        self.lookback_days = lookback_days
         self._pending: Dict[str, float] = {}
         self._lock = threading.Lock()
         self._running = True
@@ -141,6 +148,17 @@ class CoalescingFileHandler(FileSystemEventHandler):
                     pass
 
     def _process_file(self, path: Path) -> Optional[RawIngestPayload]:
+        try:
+            mtime = path.stat().st_mtime
+            rec_ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        except Exception:
+            rec_ts = datetime.now(timezone.utc)
+
+        if self.lookback_days:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=self.lookback_days)
+            if rec_ts < cutoff:
+                return None
+
         ext = path.suffix.lower()
         if ext == ".eml":
             return parse_eml_file(path)
@@ -154,7 +172,7 @@ class CoalescingFileHandler(FileSystemEventHandler):
             original_path=str(path.resolve()),
             subject=path.name,
             folder=path.parent.name,
-            received_ts_utc=datetime.now(timezone.utc),
+            received_ts_utc=rec_ts,
             attachments=[
                 RawAttachment(
                     filename=path.name,
@@ -203,9 +221,14 @@ class DirectoryWatcher:
         watch_paths: list[Path],
         on_payload: Callable[[RawIngestPayload], None],
         on_deleted: Optional[Callable[[str], None]] = None,
+        lookback_days: Optional[int] = None,
     ):
         self.watch_paths = watch_paths
-        self.handler = CoalescingFileHandler(on_payload=on_payload, on_deleted=on_deleted)
+        self.handler = CoalescingFileHandler(
+            on_payload=on_payload,
+            on_deleted=on_deleted,
+            lookback_days=lookback_days,
+        )
         self.observer = Observer()
 
     def start(self) -> None:
@@ -224,13 +247,18 @@ def ingest_filesystem_path(
     target_path: Path,
     coordinator: Any,
     recursive: bool = True,
+    lookback_days: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Synchronously ingest a local file or directory tree through PipelineCoordinator."""
     target = Path(target_path).resolve()
     if not target.exists():
         raise FileNotFoundError(f"Path not found: {target}")
 
-    handler = CoalescingFileHandler(on_payload=coordinator.ingest_payload, debounce_seconds=60.0)
+    handler = CoalescingFileHandler(
+        on_payload=coordinator.ingest_payload,
+        debounce_seconds=60.0,
+        lookback_days=lookback_days,
+    )
     handler.stop()
 
     if target.is_file():

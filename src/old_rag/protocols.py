@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 from old_rag.contracts import (
+    ChatAccountConfig,
+    ChatMessageItem,
+    ChatPluginDescriptor,
+    ChatRoomSummary,
+    DataTypeQuotaStatus,
     DocumentChunk,
+    EvictionCandidateSummary,
     NormalizedDocumentJSON,
     OutboxOp,
     OutboxRecord,
+    OutgoingChatMessage,
+    QuotaPurgeResult,
     RawIngestPayload,
     SearchQuery,
     SearchResult,
+    SourceType,
 )
 
 
@@ -77,8 +88,14 @@ class CatalogProtocol(Protocol):
         received_ts_utc: Optional[str] = None,
         text_cas_ref: Optional[str] = None,
         raw_msg_cas_ref: Optional[str] = None,
+        account_id: Optional[str] = None,
+        byte_size: int = 0,
+        chunk_ids: Optional[List[str]] = None,
+        is_starred: bool = False,
+        is_pinned: bool = False,
+        is_read: bool = True,
     ) -> None:
-        """Upsert document lineage and metadata in catalog."""
+        """Upsert document lineage and metadata in catalog. Thread-safe via SQLite WAL mode."""
         ...
 
     def record_blob_ref(self, blob_hash: str, doc_id: str, size_bytes: int) -> int:
@@ -183,8 +200,11 @@ class ChunkerProtocol(Protocol):
 class IndexerProtocol(Protocol):
     """Atomic multi-index mutator for SQLite FTS5 and LanceDB."""
 
-    def upsert_chunks(self, chunks: List[DocumentChunk], embeddings: List[List[float]]) -> None:
-        """Idempotently insert/update chunks in lexical FTS5 and LanceDB vector stores."""
+    def upsert_chunks(self, chunks: List[DocumentChunk], embeddings: Optional[List[List[float]]] = None) -> None:
+        """Idempotently insert/update chunks in lexical FTS5 and LanceDB vector stores.
+
+        Concurrency: Serialized by single-writer outbox queue; safe with concurrent readers.
+        """
         ...
 
     def delete_chunks(self, chunk_ids: List[str]) -> None:
@@ -210,7 +230,10 @@ class CoordinatorProtocol(Protocol):
     """Single-writer coordinator for pipeline, outbox recovery, and offline re-indexing."""
 
     def ingest_payload(self, payload: RawIngestPayload) -> None:
-        """Run full ingestion pipeline: extract -> CAS -> chunk -> embed -> outbox commit."""
+        """Run full ingestion pipeline: extract -> CAS -> chunk -> embed -> outbox commit.
+
+        Concurrency: Serialized gate for ingestion transactions.
+        """
         ...
 
     def process_outbox(self) -> int:
@@ -219,5 +242,154 @@ class CoordinatorProtocol(Protocol):
 
     def reindex_all(self) -> int:
         """Perform 100% offline rebuild reading from CAS Tier 1 without Outlook or VLM."""
+        ...
+
+
+# --- v3 Extensible Chat, Sync, Quota & Bridge Protocols ---
+
+@runtime_checkable
+class ChatAdapterProtocol(Protocol):
+    """Interface for real-time chat connector adapters (Rocket.Chat, Google Chat, Teams, Jabber/XMPP)."""
+
+    adapter_type: str
+
+    def get_descriptor(self) -> ChatPluginDescriptor:
+        """Return plugin descriptor and declared capabilities."""
+        ...
+
+    def test_connection(self) -> Dict[str, Any]:
+        """Verify network connectivity and credentials. Must raise on network/auth failure."""
+        ...
+
+    def list_rooms(self, include_dms: bool = True) -> List[ChatRoomSummary]:
+        """Fetch accessible rooms and 1:1 direct message threads."""
+        ...
+
+    def fetch_messages(
+        self,
+        room_id: str,
+        since_utc: Optional[datetime] = None,
+        cursor: Optional[str] = None,
+        limit: int = 100,
+    ) -> Tuple[List[ChatMessageItem], Optional[str]]:
+        """Fetch historical or incremental messages from a room/DM honoring lookback_days."""
+        ...
+
+    def send_message(self, msg: OutgoingChatMessage) -> Dict[str, Any]:
+        """Dispatch an outgoing message or thread reply to the chat network."""
+        ...
+
+    def stream_events(self, on_message: Any, stop_event: Any) -> None:
+        """Stream real-time stanzas/events into the ingest queue until stop_event is set."""
+        ...
+
+
+@runtime_checkable
+class ChatPluginRegistryProtocol(Protocol):
+    """Host registry for built-in and third-party chat adapter plugins."""
+
+    def register(self, adapter_cls: type) -> None:
+        """Register a chat adapter class."""
+        ...
+
+    def discover_plugins(self, plugin_dir: Optional[Path] = None) -> List[ChatPluginDescriptor]:
+        """Discover external chat plugins via entry_points and local plugin directory."""
+        ...
+
+    def list_plugins(self) -> List[ChatPluginDescriptor]:
+        """List descriptors for all currently registered chat adapters."""
+        ...
+
+    def create_adapter(self, config: ChatAccountConfig) -> ChatAdapterProtocol:
+        """Factory method to instantiate a configured ChatAdapterProtocol."""
+        ...
+
+
+@runtime_checkable
+class QuotaGovernorProtocol(Protocol):
+    """Hard-drive quota monitor and atomic cross-store eviction engine."""
+
+    def get_quota_status(self, source_type: Optional[SourceType] = None) -> List[DataTypeQuotaStatus]:
+        """Compute exact byte usage and quota ratios across all or filtered source types."""
+        ...
+
+    def rank_eviction_candidates(self, source_type: SourceType, bytes_to_free: int) -> List[EvictionCandidateSummary]:
+        """Rank non-pinned eviction candidates according to the configured QuotaPolicyType."""
+        ...
+
+    def enforce_quota(self, source_type: SourceType, dry_run: bool = False) -> QuotaPurgeResult:
+        """Enforce quota limits by purging ranked candidates across all stores and compacting disk.
+
+        Concurrency: Serialized execution with WAL checkpointing.
+        """
+        ...
+
+
+@runtime_checkable
+class OldRAGBridgeProtocol(Protocol):
+    """Pure-Python Desktop Bridge and programmatic GenAI SDK interface (zero HTTP server)."""
+
+    def dispatch(self, action: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Dispatch a named bridge action with a payload dict, returning BridgeResponseEnvelope."""
+        ...
+
+    def dispatch_json(self, request_json: str) -> str:
+        """JSON-string serialization wrapper around dispatch() for pywebview/IPC."""
+        ...
+
+    def render_desktop_html(self, inline_assets: bool = True) -> str:
+        """Render self-contained single-page desktop workspace with zero external CDNs."""
+        ...
+
+    def describe_actions(self) -> Dict[str, Any]:
+        """Return schema descriptions of all bridge actions."""
+        ...
+
+    def get_genai_tool_definitions(self) -> List[Dict[str, Any]]:
+        """Export OpenAI/Anthropic/MCP tool calling function definitions for GenAI agents."""
+        ...
+
+    def search(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute unified cross-type hybrid search."""
+        ...
+
+    def list_mail(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """List indexed mail messages with pagination and filtering."""
+        ...
+
+    def list_chat_rooms(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """List direct message and group chat rooms across connected chat accounts."""
+        ...
+
+    def list_chat_messages(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """List messages within a chat room or direct message thread."""
+        ...
+
+    def send_chat_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Send a message to a chat room or DM thread."""
+        ...
+
+    def list_calendar_events(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """List calendar events in a date window."""
+        ...
+
+    def get_quota_status(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Retrieve per-data-type quota consumption and eviction status."""
+        ...
+
+    def run_quota_purge(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Execute or preview a quota purge for a specific source type."""
+        ...
+
+    def get_sync_status(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Retrieve real-time connector sync watermarks and health status."""
+        ...
+
+    def trigger_sync(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Trigger an immediate real-time sync cycle for one or all sources."""
+        ...
+
+    def poll_events(self, since_seq: int = 0) -> Dict[str, Any]:
+        """Poll the thread-safe UI event bus ring buffer since monotonic sequence seq."""
         ...
 

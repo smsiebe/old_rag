@@ -459,4 +459,7 @@ class DocumentExtractor(ExtractorProtocol):
             structured_context=doc_structured_context,
             document_metadata=doc_metadata,
             unstructured_annotations=all_annotations,
+            account_id=payload.account_id,
+            chat_meta=payload.chat_meta,
+            calendar_meta=payload.calendar_meta,
         )

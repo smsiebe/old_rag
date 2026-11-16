@@ -167,14 +167,18 @@ class IMAPConnector:
         folders: Optional[List[str]] = None,
         date_range: str = "1yr",
         limit_per_folder: int = 50,
+        lookback_days: Optional[int] = None,
+        uid_cursor: Optional[str] = None,
     ) -> Generator[RawIngestPayload, None, None]:
-        """Fetch emails across folders within the specified date range."""
+        """Fetch emails across folders within the specified date range or lookback days, optionally filtered by UID."""
         client = self._connect()
         try:
             # Build search criteria
             since_date: Optional[datetime] = None
             now = datetime.now(timezone.utc)
-            if date_range == "30d":
+            if lookback_days is not None:
+                since_date = now - timedelta(days=lookback_days) if lookback_days > 0 else None
+            elif date_range == "30d":
                 since_date = now - timedelta(days=30)
             elif date_range == "90d":
                 since_date = now - timedelta(days=90)
@@ -186,6 +190,10 @@ class IMAPConnector:
             search_criteria = []
             if since_date:
                 search_criteria.append(f'SINCE "{since_date.strftime("%d-%b-%Y")}"')
+            if uid_cursor and uid_cursor.isdigit():
+                next_uid = int(uid_cursor) + 1
+                search_criteria.append(f'UID {next_uid}:*')
+
             search_query = " ".join(search_criteria) if search_criteria else "ALL"
 
             folders_to_poll = folders or ["INBOX"]
